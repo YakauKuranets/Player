@@ -7,8 +7,8 @@
       "description": "Facial enhancement model",
       "size": 2147483648,
       "filename": "restoreformer.pth",
-      "url": "https://YOUR_SERVER/models/restoreformer.pth",
-      "checksum": "",
+      "url": "https://github.com/wzhouxiff/RestoreFormer/releases/download/v1.0.0/RestoreFormer.pth",
+      "checksum": "b931a2461cd90d5c4702183987bcb22cbb3818d764ebdbb3bf7bf0e549097b20",
       "required": true
     },
     "realesrgan": {
@@ -17,8 +17,8 @@
       "description": "Super-resolution model",
       "size": 524288000,
       "filename": "realesrgan.pth",
-      "url": "https://YOUR_SERVER/models/realesrgan.pth",
-      "checksum": "",
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+      "checksum": "69f3693a67d36e4fbf2df19157a1f981dffbdc04aa5be7a466183001b2b304ca",
       "required": true
     },
     "nafnet": {
@@ -27,8 +27,8 @@
       "description": "Denoising model",
       "size": 419430400,
       "filename": "nafnet.pth",
-      "url": "https://YOUR_SERVER/models/nafnet.pth",
-      "checksum": "",
+      "url": "https://github.com/megvii-research/NAFNet/releases/download/v1.0/nafnet-siddd.pth",
+      "checksum": "3ff2a7a4568bc0c98e402801ea51a127e842fc33fe3d7fb0cf9b7eb171d4b5ec",
       "required": false
     }
   }
