@@ -1,0 +1,113 @@
+# PLAYE Pro Lab — Future Improvements Roadmap
+
+Этот документ аккумулирует приоритетные улучшения, чтобы развить лабораторию
+до уровня production/pro (в т.ч. для криминалистических сценариев).
+
+## Уже реализовано (baseline)
+
+- Request tracing через `X-Request-ID` в desktop backend.
+- Базовый forensic audit log в формате JSONL (`models-data/audit/events.jsonl`).
+- Фиксация `input_sha256`/`output_sha256`, длительности (`duration_ms`) и статуса операции.
+- Оптимизация hot-path: SHA-256 и расширенный audit payload считаются только при включённом audit-режиме.
+- Кэширование служебных метаданных (manifest meta cache и audit path cache) для снижения накладных расходов на запрос.
+
+## 1) Архитектура и пайплайн
+
+### 1.1 Unified backend API
+- Объединить desktop `backend/server.py` и cloud-роуты `backend/app/api/routes.py` в единый контракт API.
+- Согласовать форматы ответов (`request_id`, `status`, `error`, `result`).
+- Единая модель job execution: sync + async режимы с `task_id`.
+
+### 1.2 Stage-based processing graph
+- Перейти от отдельных endpoint-операций к графу стадий:
+  1. ingest
+  2. detect/track
+  3. enhance/restore
+  4. QA metrics
+  5. export/report
+- Для видео: поддержка temporal consistency и track-aware обработки.
+
+## 2) Forensic-grade доказуемость
+
+### 2.1 Provenance / audit trail
+- На каждую операцию сохранять:
+  - `request_id`
+  - `operator`
+  - `input_sha256`
+  - `output_sha256`
+  - `model_name` + `model_version`
+  - параметры запуска
+  - timestamp UTC
+
+### 2.2 Chain-of-custody reports
+- Экспортировать отчёт (JSON + PDF):
+  - история трансформаций,
+  - контрольные суммы,
+  - версии моделей,
+  - предупреждение о допустимости/ограничениях результатов.
+
+## 3) Модели и качество
+
+### 3.1 Model portfolio
+- Face restoration: RestoreFormer / CodeFormer / GFPGAN (режимы quality vs identity).
+- Super-resolution: Real-ESRGAN x2/x4 + варианты для видео.
+- Denoise/Deblur: NAFNet + специализированные deblur-модели.
+- Detection: YOLOv8-face/RetinaFace + object detection для контекста сцены.
+
+### 3.2 Quality gates
+- Benchmark наборы (golden set) для фото и видео.
+- Метрики: PSNR, SSIM, LPIPS, NIQE/BRISQUE, temporal flicker.
+- Запрет публикации релиза при деградации метрик выше заданного порога.
+
+## 4) Производительность
+
+### 4.1 GPU efficiency
+- tiled inference,
+- mixed precision (fp16/bf16),
+- TensorRT/ONNX Runtime для hot paths,
+- preloading моделей и warmup.
+
+### 4.2 Queue orchestration
+- Redis + Celery/RQ для асинхронного батч-процессинга,
+- retries/backoff,
+- SLA по времени обработки и мониторинг очередей.
+
+## 5) UX и операторские режимы
+
+- Presets:
+  - `Forensic Safe` (минимальная агрессивность изменений),
+  - `Balanced`,
+  - `Presentation`.
+- Сравнение before/after (slider, zoom sync, diff heatmap).
+- Прозрачный лог действий оператора в UI.
+
+## 6) Безопасность и соответствие
+
+- Ролевой доступ (RBAC),
+- защита API ключей и secrets,
+- шифрование артефактов at-rest,
+- настраиваемая политика хранения и удаления материалов.
+
+## Прогресс по глобальному плану (оценка)
+
+- **Phase 1:** ~50% (request tracing + audit trail уже есть; осталось unified API schema, полноценный queued job orchestration, quality checks в CI).
+- **Phase 2:** ~5% (формально зафиксированы требования, но video temporal pipeline и автоматические отчёты ещё не внедрены).
+- **Phase 3:** ~0% (model governance, multi-node/multi-GPU orchestration и explainability пока не начинались).
+
+## Реализация по этапам
+
+### Phase 1 (сделать в первую очередь)
+1. Unified API schema + request tracing.
+2. Базовый forensic audit log.
+3. Job orchestration (queued/sync).
+4. Базовые quality checks в CI.
+
+### Phase 2
+1. Video temporal pipeline.
+2. Расширенный модельный каталог и пресеты.
+3. Автоматические forensic reports.
+
+### Phase 3
+1. Полноценная model governance система.
+2. Многомашинная/многогпу оркестрация.
+3. Продвинутые explainability/traceability инструменты.
