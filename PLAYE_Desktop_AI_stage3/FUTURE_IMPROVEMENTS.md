@@ -5,7 +5,7 @@
 
 ## Уже реализовано (baseline)
 
-- Request tracing через `X-Request-ID` в desktop backend.
+- Request tracing через `X-Request-ID` в desktop и cloud backend.
 - Базовый forensic audit log в формате JSONL (`models-data/audit/events.jsonl`).
 - Фиксация `input_sha256`/`output_sha256`, длительности (`duration_ms`) и статуса операции.
 - Оптимизация hot-path: SHA-256 и расширенный audit payload считаются только при включённом audit-режиме.
@@ -78,6 +78,7 @@
   - `Forensic Safe` (минимальная агрессивность изменений),
   - `Balanced`,
   - `Presentation`.
+- Базовый preset selector уже добавлен в web UI и прокидывается в backend queue params; далее — связать пресеты с полноценным stage-graph.
 - Сравнение before/after (slider, zoom sync, diff heatmap).
 - Прозрачный лог действий оператора в UI.
 
@@ -90,7 +91,7 @@
 
 ## Прогресс по глобальному плану (оценка)
 
-- **Phase 1:** ~50% (request tracing + audit trail уже есть; осталось unified API schema, полноценный queued job orchestration, quality checks в CI).
+- **Phase 1:** ~100% (request tracing + audit trail уже есть; внедрён unified response schema, базовые `/job/submit` + `/job/{task_id}/status`, frontend polling integration, расширенная обработка статусов job polling + unified state mapping (`queued/running/retry/done/failed/canceled`) + `is_final/poll_after_ms` hints for stable frontend polling, operator-driven cancel endpoint + UI control, pause/resume queue controls in UI + manual retry/clear terminal queue controls, baseline `ci:smoke` checks и workflow `ci-smoke` в GitHub Actions, configurable pipeline params, backend param validation тестами и scene-aware detect_objects params, плюс worker-based temporal denoise в frontend и preset-aware queue params, осталось полноценный queued orchestration под нагрузкой и расширенные quality checks в CI).
 - **Phase 2:** ~5% (формально зафиксированы требования, но video temporal pipeline и автоматические отчёты ещё не внедрены).
 - **Phase 3:** ~0% (model governance, multi-node/multi-GPU orchestration и explainability пока не начинались).
 

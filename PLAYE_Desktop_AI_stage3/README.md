@@ -75,4 +75,9 @@ Electron сам поднимет Python backend (`backend/server.py`).
 node scripts/check-updates.js
 node scripts/update-models.js
 node scripts/download-models.js --required
+npm run ci:smoke
+npm run test:api-client
+npm run test:job-params
+npm run test:task-status
+npm run test:cancel-route
 ```
