@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Test_PLAYE</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar__header">
+          <h1>Test_PLAYE</h1>
+          <label class="upload">
+            <input type="file" id="file-input" accept="video/*" multiple />
+            <span>Загрузить видео</span>
+          </label>
+        </div>
+        <ul id="playlist" class="playlist"></ul>
+      </aside>
+
+      <main class="main">
+        <section class="viewer">
+          <div class="viewer__surface" id="viewer-surface">
+            <video id="video" controls playsinline></video>
+            <canvas id="temporal-preview" class="temporal-preview"></canvas>
+            <canvas id="ai-overlay" class="ai-overlay"></canvas>
+            <div class="motion-indicator" id="motion-indicator">Движение</div>
+          </div>
+          <p class="hint">
+            Колесико мыши — масштаб; двойной клик — сброс масштаба.
+          </p>
+        </section>
+
+        <section class="controls">
+          <div class="control-group timeline">
+            <h2>Таймлайн</h2>
+            <div class="timeline-header">
+              <span id="timeline-current">0:00.000</span>
+              <span id="timeline-duration">0:00.000</span>
+            </div>
+            <div class="timeline-bar">
+              <div id="timeline-markers" class="timeline-markers"></div>
+              <input
+                type="range"
+                id="timeline"
+                min="0"
+                max="0"
+                step="0.01"
+                value="0"
+              />
+            </div>
+            <div class="timeline-controls">
+              <button id="timeline-zoom-out" type="button">-</button>
+              <span id="timeline-zoom-value">1.0x</span>
+              <button id="timeline-zoom-in" type="button">+</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <h2>Воспроизведение</h2>
+            <label>
+              Скорость: <span id="speed-value">1x</span>
+              <input
+                type="range"
+                id="speed"
+                min="0.25"
+                max="100"
+                value="1"
+                step="0.25"
+              />
+            </label>
+            <div class="button-row">
+              <button id="frame-back">Кадр назад</button>
+              <button id="frame-forward">Кадр вперед</button>
+              <button id="screenshot">Скриншот</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <h2>Нарезка</h2>
+            <div class="clip-row">
+              <button id="mark-in">Установить IN</button>
+              <button id="mark-out">Установить OUT</button>
+            </div>
+            <div class="clip-range">
+              <span>IN: <strong id="clip-in">—</strong></span>
+              <span>OUT: <strong id="clip-out">—</strong></span>
+            </div>
+            <button id="export-clip">Экспорт нарезки</button>
+          </div>
+
+          <div class="control-group">
+            <h2>Качество</h2>
+            <label>
+              Улучшение (контраст/яркость)
+              <input
+                type="range"
+                id="enhance"
+                min="0"
+                max="100"
+                value="0"
+              />
+            </label>
+            <label>
+              Экспозиция
+              <input
+                type="range"
+                id="exposure"
+                min="-50"
+                max="50"
+                value="0"
+                step="1"
+              />
+            </label>
+            <label>
+              Температура (цвет)
+              <input
+                type="range"
+                id="temperature"
+                min="-50"
+                max="50"
+                value="0"
+                step="1"
+              />
+            </label>
+            <label>
+              Шумоподавление (мягкость)
+              <input
+                type="range"
+                id="denoise"
+                min="0"
+                max="10"
+                value="0"
+                step="0.5"
+              />
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="temporal-denoise" />
+              Temporal шумоподавление (demo)
+            </label>
+            <label>
+              Окно temporal (кадры)
+              <input
+                type="range"
+                id="temporal-window"
+                min="1"
+                max="6"
+                value="3"
+                step="1"
+              />
+            </label>
+            <label>
+              Профиль шумоподавления
+              <select id="denoise-profile">
+                <option value="light">Лёгкий</option>
+                <option value="medium" selected>Средний</option>
+                <option value="heavy">Сильный</option>
+              </select>
+            </label>
+            <label>
+              Детализация (clarity)
+              <input
+                type="range"
+                id="clarity"
+                min="0"
+                max="100"
+                value="0"
+                step="1"
+              />
+            </label>
+            <label>
+              Резкость (demo)
+              <input
+                type="range"
+                id="sharpness"
+                min="0"
+                max="100"
+                value="0"
+                step="1"
+              />
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="lowlight-boost" />
+              Усиление low-light
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="upscale" />
+              Апскейл (режим)
+            </label>
+            <label>
+              Апскейл фактор
+              <select id="upscale-factor">
+                <option value="2" selected>2x</option>
+                <option value="4">4x</option>
+              </select>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="grayscale" />
+              Ч/Б режим
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="bypass-filters" />
+              Оригинал без фильтров
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="stabilization-toggle" />
+              Стабилизация (кроп, демо)
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="stabilization-auto-toggle" />
+              Авто-стабилизация (алгоритм, демо)
+            </label>
+            <label>
+              Сила стабилизации
+              <input
+                type="range"
+                id="stabilization-strength"
+                min="0"
+                max="10"
+                value="0"
+                step="1"
+              />
+            </label>
+            <label>
+              Сглаживание стабилизации
+              <input
+                type="range"
+                id="stabilization-smoothing"
+                min="0"
+                max="100"
+                value="60"
+                step="5"
+              />
+            </label>
+            <label>
+              Смещение стабилизации X
+              <input
+                type="range"
+                id="stabilization-offset-x"
+                min="-50"
+                max="50"
+                value="0"
+                step="1"
+              />
+            </label>
+            <label>
+              Смещение стабилизации Y
+              <input
+                type="range"
+                id="stabilization-offset-y"
+                min="-50"
+                max="50"
+                value="0"
+                step="1"
+              />
+            </label>
+            <div class="button-row">
+              <button id="stabilization-profile-light" type="button">
+                Стабилизация Light
+              </button>
+              <button id="stabilization-profile-medium" type="button">
+                Стабилизация Medium
+              </button>
+              <button id="stabilization-profile-strong" type="button">
+                Стабилизация Strong
+              </button>
+            </div>
+            <div class="button-row">
+              <button id="preset-lowlight" type="button">Профиль Low-light</button>
+              <button id="preset-night" type="button">Профиль Ночь</button>
+              <button id="preset-detail" type="button">Профиль Детализация</button>
+              <button id="preset-ultra-lowlight" type="button">
+                Профиль Ultra Low-light
+              </button>
+            </div>
+            <button id="reset-filters" type="button">Сброс фильтров</button>
+          </div>
+
+          <div class="control-group">
+            <h2>Детектор движения</h2>
+            <label class="toggle">
+              <input type="checkbox" id="motion-marker-toggle" />
+              Авто-маркеры движения
+            </label>
+            <label>
+              Чувствительность детектора
+              <input
+                type="range"
+                id="motion-sensitivity"
+                min="200"
+                max="2000"
+                value="800"
+                step="50"
+              />
+              <span class="range-value" id="motion-sensitivity-value">800</span>
+            </label>
+            <label>
+              Интервал маркеров (сек)
+              <input
+                type="range"
+                id="motion-cooldown"
+                min="1"
+                max="10"
+                value="3"
+                step="1"
+              />
+              <span class="range-value" id="motion-cooldown-value">3</span>
+            </label>
+            <div class="button-row">
+              <button id="motion-start">Старт</button>
+              <button id="motion-stop" disabled>Стоп</button>
+            </div>
+            <p class="muted">
+              Базовая детекция по разнице кадров (демо).
+            </p>
+          </div>
+
+          <div class="control-group">
+            <h2>AI анализ (лица и объекты)</h2>
+            <button id="ai-face-detect" type="button">
+              Найти лица (демо)
+            </button>
+            <button id="ai-object-detect" type="button">
+              Найти объекты (демо)
+            </button>
+            <label>
+              AI runtime provider
+              <select id="ai-provider-select">
+                <option value="mock" selected>mock (demo)</option>
+                <option value="onnx">onnx runtime</option>
+                <option value="torch">torch runtime</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button id="ai-capability-check" type="button">Проверка AI/GPU capability</button>
+            </div>
+            <p class="muted" id="ai-capability-status">Capability: не проверено.</p>
+            <div class="button-row">
+              <button id="ai-track-start" type="button">Старт трекинга (демо)</button>
+              <button id="ai-track-stop" type="button" disabled>Стоп трекинга</button>
+            </div>
+            <label>
+              AI Super-resolution фактор
+              <select id="ai-sr-factor">
+                <option value="1.5">1.5x</option>
+                <option value="2" selected>2x</option>
+                <option value="4">4x</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button id="ai-sr-apply" type="button">AI Super-resolution (demo)</button>
+              <button id="ai-sr-reset" type="button">Сброс AI SR</button>
+            </div>
+            <label>
+              Порог авто‑сцен (demo)
+              <input type="range" id="ai-scene-threshold" min="10" max="80" value="28" step="1" />
+            </label>
+            <div class="button-row">
+              <button id="ai-scenes-detect" type="button">Авто‑сцены (demo)</button>
+              <button id="ai-scenes-clear" type="button">Очистить авто‑сцены</button>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="ai-face-marker-toggle" />
+              Добавлять маркеры лиц
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="ai-object-marker-toggle" />
+              Добавлять маркеры объектов
+            </label>
+            <p class="muted" id="ai-status">Готов к анализу.</p>
+            <p class="muted">Лица:</p>
+            <ul class="ai-face-list" id="ai-face-list"></ul>
+            <p class="muted">Объекты:</p>
+            <ul class="ai-face-list" id="ai-object-list"></ul>
+            <p class="muted">Сцены (AI):</p>
+            <ul class="ai-face-list" id="ai-scene-list"></ul>
+          </div>
+
+          <div class="control-group">
+            <h2>Модели (локальные)</h2>
+            <div class="button-row">
+              <button id="models-check" type="button">Проверить</button>
+              <button id="models-update" type="button">Скачать/обновить</button>
+              <button id="models-open-folder" type="button">Открыть папку</button>
+            </div>
+            <p class="muted" id="models-status">Модели: не проверено.</p>
+          </div>
+
+          <div class="control-group">
+            <h2>Дело и журнал</h2>
+            <label>
+              ID дела
+              <input type="text" id="case-id" placeholder="CASE-2025-0001" />
+            </label>
+            <label>
+              Ответственный
+              <input type="text" id="case-owner" placeholder="ФИО / отдел" />
+            </label>
+            <label>
+              Статус дела
+              <select id="case-status">
+                <option value="active">Активное</option>
+                <option value="review">На проверке</option>
+                <option value="closed">Закрыто</option>
+              </select>
+            </label>
+            <label>
+              Теги дела
+              <input
+                type="text"
+                id="case-tags"
+                placeholder="камера-01, вход, ночь"
+              />
+            </label>
+            <label>
+              Описание/сводка
+              <textarea
+                id="case-summary"
+                rows="3"
+                placeholder="Краткая сводка по делу и наблюдениям"
+              ></textarea>
+            </label>
+            <div class="button-row">
+              <button id="log-entry">Добавить запись</button>
+              <button id="export-log">Экспорт журнала</button>
+              <button id="export-report">Экспорт отчёта</button>
+              <button id="preview-report" type="button">
+                Предпросмотр отчёта
+              </button>
+              <button id="export-ffmpeg-job" type="button">
+                FFmpeg Job (3.1.2 draft)
+              </button>
+              <button id="download-ffmpeg-job" type="button">
+                Экспорт FFmpeg Job JSON
+              </button>
+            </div>
+            <label>
+              FFmpeg Job preview
+              <textarea
+                id="ffmpeg-job-preview"
+                rows="7"
+                readonly
+                class="ffmpeg-job-preview"
+                placeholder="Нажмите FFmpeg Job (demo), чтобы собрать текущие параметры обработки в job draft"
+              ></textarea>
+            </label>
+            <div class="button-row">
+              <button id="queue-ffmpeg-job" type="button">В очередь pipeline (3.3.2)</button>
+            </div>
+            <p class="muted" id="pipeline-status">Pipeline: задач нет.</p>
+            <label>
+              Прогресс pipeline
+              <progress id="pipeline-progress" max="100" value="0"></progress>
+            </label>
+            <p class="muted" id="pipeline-progress-label">0%</p>
+            <ul id="pipeline-queue" class="log-list"></ul>
+            <p class="muted" id="pipeline-error-title">Ошибки pipeline:</p>
+            <ul id="pipeline-errors" class="log-list"></ul>
+            <ul id="log-list" class="log-list"></ul>
+          </div>
+
+          <div class="control-group">
+            <h2>Библиотека дел</h2>
+            <label>
+              Сохранённые дела
+              <select id="case-library"></select>
+            </label>
+            <label>
+              Поиск по делам
+              <input
+                type="text"
+                id="case-search"
+                placeholder="ID, ответственный, тег"
+              />
+            </label>
+            <div class="button-row">
+              <button id="case-save">Сохранить дело</button>
+              <button id="case-load">Загрузить</button>
+              <button id="case-delete">Удалить</button>
+              <button id="case-clear-search" type="button">Сброс поиска</button>
+            </div>
+            <div class="button-row">
+              <button id="case-export-library" type="button">
+                Экспорт библиотеки
+              </button>
+              <button id="case-import-library" type="button">
+                Импорт библиотеки
+              </button>
+              <input
+                id="case-import-input"
+                type="file"
+                accept="application/json"
+                hidden
+              />
+            </div>
+            <p class="muted" id="case-count"></p>
+            <p class="muted">
+              Сохранение выполняется локально в браузере.
+            </p>
+          </div>
+
+          <div class="control-group">
+            <h2>Сводка по делу</h2>
+            <div class="summary-grid">
+              <div class="summary-card">
+                <span class="summary-label">Файлов</span>
+                <strong id="case-files-count">0</strong>
+              </div>
+              <div class="summary-card">
+                <span class="summary-label">Маркеров</span>
+                <strong id="case-markers-count">0</strong>
+              </div>
+              <div class="summary-card">
+                <span class="summary-label">Записей журнала</span>
+                <strong id="case-logs-count">0</strong>
+              </div>
+            </div>
+            <p class="muted">
+              Сводка обновляется при загрузке дела и изменениях.
+            </p>
+          </div>
+
+          <div class="control-group">
+            <h2>Маркеры событий</h2>
+            <label>
+              Тип события
+              <select id="marker-type">
+                <option value="manual">Ручной</option>
+                <option value="movement">Движение</option>
+                <option value="face">Лицо</option>
+                <option value="object">Объект</option>
+              </select>
+            </label>
+            <label>
+              Комментарий
+              <input type="text" id="marker-note" placeholder="Опишите событие" />
+            </label>
+            <div class="button-row">
+              <button id="add-marker">Добавить маркер</button>
+              <button id="export-markers">Экспорт маркеров</button>
+            </div>
+            <ul id="marker-list" class="log-list"></ul>
+          </div>
+        </section>
+      </main>
+    </div>
+    <canvas id="capture" class="hidden"></canvas>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>

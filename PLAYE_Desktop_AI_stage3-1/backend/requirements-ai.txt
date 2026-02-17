@@ -1,0 +1,9 @@
+# Optional AI restoration stack.
+# Install this file only when you really need these models.
+# NOTE: these dependencies are heavy and can require large temporary disk space
+# during build isolation on Windows.
+
+basicsr==1.4.2
+facexlib==0.3.0
+gfpgan==1.3.8
+realesrgan==0.3.0
