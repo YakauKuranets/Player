@@ -330,9 +330,17 @@ async def submit_job(
         raise HTTPException(status_code=400, detail="Invalid image_base64 payload") from err
 
     task_fn = task_map[operation]
-    if hasattr(task_fn, "delay"):
-        task_result = task_fn.delay(image_bytes, *extra_args)
-        _log_enterprise_action(request, "job_submit", {"operation": operation, "mode": "async", "params": normalized_params})
+    if hasattr(task_fn, "apply_async"):
+        queue = gpu_router.get_best_queue()
+        task_result = task_fn.apply_async(
+            args=[image_bytes, *extra_args],
+            queue=queue,
+        )
+        _log_enterprise_action(
+            request,
+            "job_submit",
+            {"operation": operation, "mode": "async", "params": normalized_params, "queue": queue},
+        )
         return success_response(
             request,
             status="queued",
@@ -342,6 +350,7 @@ async def submit_job(
                 "operation": operation,
                 "status": "pending",
                 "params": normalized_params,
+                "queue": queue,
             },
         )
 

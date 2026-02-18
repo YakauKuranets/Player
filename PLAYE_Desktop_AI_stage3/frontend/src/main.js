@@ -12,6 +12,7 @@ import { createAiBlueprint } from "./blueprints/ai.js";
 import { createHypothesisBlueprint } from "./blueprints/hypothesis.js";
 import { createPhotoBlueprint } from "./blueprints/photo.js";
 import { createCompareBlueprint } from "./blueprints/compare.js";
+import { createEnterpriseBlueprint } from "./blueprints/enterprise.js";
 import { createApiClient } from "./api-client.js";
 
 const elements = {
@@ -165,6 +166,33 @@ const elements = {
   apiApplyPresetButton: document.getElementById("api-apply-preset"),
   apiUpscaleFactor: document.getElementById("api-upscale-factor"),
   apiDenoiseLevel: document.getElementById("api-denoise-level"),
+  // Enterprise elements
+  loginEmail: document.getElementById("login-email"),
+  loginPassword: document.getElementById("login-password"),
+  loginButton: document.getElementById("login-button"),
+  logoutButton: document.getElementById("logout-button"),
+  loginStatus: document.getElementById("login-status"),
+  dashboardPanel: document.getElementById("enterprise-dashboard"),
+  dashboardRefreshButton: document.getElementById("enterprise-dashboard-refresh"),
+  gpuStatusButton: document.getElementById("gpu-status-refresh"),
+  gpuStatusPanel: document.getElementById("gpu-status-panel"),
+  usersTableBody: document.getElementById("enterprise-users-tbody"),
+  usersRefreshButton: document.getElementById("enterprise-users-refresh"),
+  teamNameInput: document.getElementById("team-name-input"),
+  teamDescInput: document.getElementById("team-desc-input"),
+  teamCreateButton: document.getElementById("team-create-button"),
+  teamIdInput: document.getElementById("team-id-input"),
+  teamUserIdInput: document.getElementById("team-user-id-input"),
+  teamAddUserButton: document.getElementById("team-add-user-button"),
+  teamsPanel: document.getElementById("enterprise-teams-panel"),
+  teamsRefreshButton: document.getElementById("enterprise-teams-refresh"),
+  auditTableBody: document.getElementById("enterprise-audit-tbody"),
+  auditRefreshButton: document.getElementById("enterprise-audit-refresh"),
+  auditExportCsvButton: document.getElementById("enterprise-audit-csv"),
+  auditLimitInput: document.getElementById("enterprise-audit-limit"),
+  auditActionFilter: document.getElementById("enterprise-audit-action"),
+  timeseriesPanel: document.getElementById("enterprise-timeseries"),
+  timeseriesRefreshButton: document.getElementById("enterprise-timeseries-refresh"),
 };
 
 const state = {
@@ -960,6 +988,7 @@ orchestrator.register(createAiBlueprint());
 orchestrator.register(createHypothesisBlueprint());
 orchestrator.register(createPhotoBlueprint());
 orchestrator.register(createCompareBlueprint());
+orchestrator.register(createEnterpriseBlueprint());
 
 orchestrator.start();
 initControlTabs();
