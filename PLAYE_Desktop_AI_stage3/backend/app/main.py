@@ -10,6 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:
+    _PROMETHEUS_AVAILABLE = False
+
 from app.api.auth_routes import router as auth_router
 from app.api.enterprise_reports import router as enterprise_reports_router
 from app.api.enterprise_routes import router as enterprise_router
@@ -35,6 +41,16 @@ app.include_router(ai_router, prefix="/api")
 app.include_router(auth_router)
 app.include_router(enterprise_router, prefix="/api")
 app.include_router(enterprise_reports_router, prefix="/api")
+
+# Prometheus metrics endpoint /metrics
+if _PROMETHEUS_AVAILABLE:
+    Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        should_respect_env_var=True,
+        env_var_name="ENABLE_METRICS",
+        excluded_handlers=["/metrics", "/api/health"],
+    ).instrument(app).expose(app)
 
 
 def _extract_bearer_token(request: Request) -> str | None:
