@@ -12,6 +12,7 @@ import { createAiBlueprint } from "./blueprints/ai.js";
 import { createHypothesisBlueprint } from "./blueprints/hypothesis.js";
 import { createPhotoBlueprint } from "./blueprints/photo.js";
 import { createCompareBlueprint } from "./blueprints/compare.js";
+import { createEnterpriseBlueprint } from "./blueprints/enterprise.js";
 import { createApiClient } from "./api-client.js";
 
 const elements = {
@@ -165,6 +166,35 @@ const elements = {
   apiApplyPresetButton: document.getElementById("api-apply-preset"),
   apiUpscaleFactor: document.getElementById("api-upscale-factor"),
   apiDenoiseLevel: document.getElementById("api-denoise-level"),
+  // Enterprise elements
+  loginEmail: document.getElementById("login-email"),
+  loginPassword: document.getElementById("login-password"),
+  loginButton: document.getElementById("login-button"),
+  logoutButton: document.getElementById("logout-button"),
+  loginStatus: document.getElementById("login-status"),
+  dashboardPanel: document.getElementById("enterprise-dashboard"),
+  dashboardRefreshButton: document.getElementById("enterprise-dashboard-refresh"),
+  gpuStatusButton: document.getElementById("gpu-status-refresh"),
+  gpuStatusPanel: document.getElementById("gpu-status-panel"),
+  usersTableBody: document.getElementById("enterprise-users-tbody"),
+  usersRefreshButton: document.getElementById("enterprise-users-refresh"),
+  teamNameInput: document.getElementById("team-name-input"),
+  teamDescInput: document.getElementById("team-desc-input"),
+  teamCreateButton: document.getElementById("team-create-button"),
+  teamIdInput: document.getElementById("team-id-input"),
+  teamUserIdInput: document.getElementById("team-user-id-input"),
+  teamAddUserButton: document.getElementById("team-add-user-button"),
+  teamsPanel: document.getElementById("enterprise-teams-panel"),
+  teamsRefreshButton: document.getElementById("enterprise-teams-refresh"),
+  auditTableBody: document.getElementById("enterprise-audit-tbody"),
+  auditRefreshButton: document.getElementById("enterprise-audit-refresh"),
+  auditExportCsvButton: document.getElementById("enterprise-audit-csv"),
+  auditLimitInput: document.getElementById("enterprise-audit-limit"),
+  auditActionFilter: document.getElementById("enterprise-audit-action"),
+  timeseriesPanel: document.getElementById("enterprise-timeseries"),
+  timeseriesRefreshButton: document.getElementById("enterprise-timeseries-refresh"),
+  modeVideoButton: document.getElementById("mode-video-button"),
+  modePhotoButton: document.getElementById("mode-photo-button"),
 };
 
 const state = {
@@ -209,6 +239,7 @@ const state = {
   pipelineErrors: [],
   pipelineMaxRetries: 2,
   hypothesisClips: [],
+  viewMode: "video",
   backendApi: {
     enabled: false,
     baseUrl: "http://127.0.0.1:8000/api",
@@ -960,9 +991,11 @@ orchestrator.register(createAiBlueprint());
 orchestrator.register(createHypothesisBlueprint());
 orchestrator.register(createPhotoBlueprint());
 orchestrator.register(createCompareBlueprint());
+orchestrator.register(createEnterpriseBlueprint());
 
 orchestrator.start();
 initControlTabs();
+initViewModeMenu();
 initBackendApiPanel();
 
 
@@ -1173,3 +1206,39 @@ async function initModelsPanel() {
 }
 
 initModelsPanel();
+
+
+function initViewModeMenu() {
+  const enterpriseSection = document.getElementById("enterprise-section");
+  const viewerSection = document.querySelector(".viewer");
+
+  if (enterpriseSection && viewerSection) {
+    let infoScroll = document.getElementById("viewer-info-scroll");
+    if (!infoScroll) {
+      infoScroll = document.createElement("div");
+      infoScroll.id = "viewer-info-scroll";
+      viewerSection.appendChild(infoScroll);
+    }
+    if (!infoScroll.contains(enterpriseSection)) {
+      infoScroll.appendChild(enterpriseSection);
+    }
+  }
+
+  const setMode = (mode) => {
+    state.viewMode = mode;
+    document.body.classList.toggle("mode-photo", mode === "photo");
+    elements.modeVideoButton?.classList.toggle("active", mode === "video");
+    elements.modePhotoButton?.classList.toggle("active", mode === "photo");
+
+    if (mode === "photo") {
+      const aiTabButton = document.querySelector('.tab-button[data-tab-target="tab-ai"]');
+      aiTabButton?.click();
+    }
+
+    actions.recordLog("ui-mode", mode === "photo" ? "Режим: реконструктор фото" : "Режим: видеоплеер");
+  };
+
+  elements.modeVideoButton?.addEventListener("click", () => setMode("video"));
+  elements.modePhotoButton?.addEventListener("click", () => setMode("photo"));
+  setMode(state.viewMode || "video");
+}
