@@ -274,11 +274,27 @@ export const createForensicBlueprint = () => ({
         elements.ffmpegJobPreview.value = JSON.stringify(jobPayload, null, 2);
       }
       const queued = actions.enqueuePipelineJob(jobPayload, "3.3.2");
-      actions.recordLog("pipeline-queue-ui", "Job добавлен в очередь mock pipeline", {
+      actions.recordLog("pipeline-queue-ui", "Job добавлен в очередь pipeline", {
         stage: "3.3.2",
         jobId: queued.id,
         hasSource: Boolean(jobPayload.source),
       });
+    });
+
+    elements.pipelinePauseButton?.addEventListener("click", () => {
+      actions.pausePipelineQueue();
+    });
+
+    elements.pipelineResumeButton?.addEventListener("click", () => {
+      actions.resumePipelineQueue();
+    });
+
+    elements.pipelineRetryFailedButton?.addEventListener("click", () => {
+      actions.retryFailedPipelineJobs();
+    });
+
+    elements.pipelineClearTerminalButton?.addEventListener("click", () => {
+      actions.clearTerminalPipelineJobs();
     });
 
     elements.addMarkerButton.addEventListener("click", () => {

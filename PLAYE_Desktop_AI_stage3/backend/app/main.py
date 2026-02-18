@@ -3,15 +3,19 @@ PLAYE PhotoLab - Cloud Backend
 FastAPI server for heavy AI processing
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import uuid
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import torch
 import logging
 from typing import Optional
+from starlette.responses import Response
 
 from app.config import settings
 from app.api import routes
+from app.api.response import error_response
 from app.db.database import create_tables
 
 # Logging setup
@@ -39,6 +43,29 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(routes.router, prefix="/api")
+
+
+@app.middleware("http")
+async def attach_request_id(request: Request, call_next):
+    """Attach request_id to every request and expose it in response headers."""
+    request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = request_id
+    response: Response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Return HTTP errors with unified API schema."""
+    return error_response(request, error=str(exc.detail), status_code=exc.status_code)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return fallback errors with unified API schema."""
+    logger.exception("Unhandled backend exception")
+    return error_response(request, error=str(exc), status_code=500)
 
 
 @app.on_event("startup")

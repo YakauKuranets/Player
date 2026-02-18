@@ -13,7 +13,7 @@ responds with a 500/503 status and logs the error.
 """
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from datetime import datetime, timezone
 import hashlib
 import io
@@ -22,6 +22,7 @@ import logging
 import os
 import time
 import uuid
+import re
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -34,6 +35,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 ALLOWED_UPSCALE_FACTORS = {2, 4, 8}
 AUDIT_DIR_NAME = "audit"
 AUDIT_LOG_FILE = "events.jsonl"
+AUDIT_REPORTS_DIR = "reports"
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -80,6 +82,29 @@ def _get_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", str(uuid.uuid4()))
 
 
+def _get_operator(request: Request) -> str:
+    operator = request.headers.get("X-Operator")
+    if operator:
+        return operator.strip()[:128] or "unknown"
+    return "unknown"
+
+
+def _canonical_json_sha256(payload: dict) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return _sha256_bytes(encoded)
+
+
+
+REPORT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def _normalize_report_id(raw_request_id: str) -> Optional[str]:
+    if not raw_request_id:
+        return None
+    candidate = str(raw_request_id).strip()
+    if REPORT_ID_RE.fullmatch(candidate):
+        return candidate
+    return None
 def _get_manifest_path() -> Path:
     models_dir_manifest = Path(get_models_dir()) / "manifest.json"
     if models_dir_manifest.exists():
@@ -132,6 +157,87 @@ def _get_audit_log_path() -> Path:
 
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _get_audit_reports_dir() -> Path:
+    reports_dir = _get_audit_log_path().parent / AUDIT_REPORTS_DIR
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    return reports_dir
+
+
+def _write_forensic_report(event: dict) -> Optional[Path]:
+    if not audit_enabled:
+        return None
+
+    request_id = _normalize_report_id(event.get("request_id"))
+    if not request_id:
+        logger.warning("Skip forensic report write due to invalid request_id: %r", event.get("request_id"))
+        return None
+
+    report_payload: dict[str, Any] = {
+        "schema_version": "1.1",
+        "report_generated_at": datetime.now(timezone.utc).isoformat(),
+        "request_id": request_id,
+        "operation": event.get("operation"),
+        "status": event.get("status"),
+        "operator": event.get("operator", "unknown"),
+        "input": {
+            "sha256": event.get("input_sha256"),
+            "filename": event.get("file_name"),
+        },
+        "output": {
+            "sha256": event.get("output_sha256"),
+            "bytes": event.get("output_bytes"),
+        },
+        "processing": {
+            "duration_ms": event.get("duration_ms"),
+            "parameters": {
+                "scale": event.get("scale"),
+                "level": event.get("level"),
+            },
+        },
+        "model": {
+            "key": event.get("model"),
+            "name": event.get("model_name"),
+            "version": event.get("model_version"),
+            "filename": event.get("model_filename"),
+            "checksum": event.get("model_checksum"),
+        },
+        "chain_of_custody": {
+            "audit_log": str(_get_audit_log_path()),
+            "audit_timestamp": event.get("timestamp"),
+        },
+        "disclaimer": (
+            "Результат AI-обработки носит вспомогательный характер и требует верификации "
+            "экспертом."
+        ),
+    }
+
+    integrity_scope = {
+        "request_id": report_payload["request_id"],
+        "operation": report_payload["operation"],
+        "status": report_payload["status"],
+        "operator": report_payload["operator"],
+        "input": report_payload["input"],
+        "output": report_payload["output"],
+        "processing": report_payload["processing"],
+        "model": report_payload["model"],
+        "chain_of_custody": report_payload["chain_of_custody"],
+    }
+    report_payload["integrity"] = {
+        "algorithm": "sha256",
+        "scope": "core_fields",
+        "digest": _canonical_json_sha256(integrity_scope),
+    }
+
+    report_path = _get_audit_reports_dir() / f"{request_id}.json"
+    try:
+        with report_path.open("w", encoding="utf-8") as out:
+            json.dump(report_payload, out, ensure_ascii=False, indent=2)
+        return report_path
+    except Exception as exc:
+        logger.error("Failed to write forensic report for %s: %s", request_id, exc)
+        return None
 
 
 def _append_audit_event(event: dict) -> None:
@@ -202,6 +308,7 @@ async def _process_image_operation(
     extra_audit: Optional[dict] = None,
 ):
     request_id = _get_request_id(request)
+    operator = _get_operator(request)
     started = time.perf_counter()
 
     try:
@@ -211,6 +318,7 @@ async def _process_image_operation(
                 "request_id": request_id,
                 "operation": operation,
                 "status": "model_unavailable",
+                "operator": operator,
                 "error": f"{model_label} model not loaded",
                 **_get_model_manifest_meta(model_key),
             })
@@ -233,11 +341,13 @@ async def _process_image_operation(
                 "output_bytes": len(png_bytes),
                 "duration_ms": duration_ms,
                 "status": "success",
+                "operator": operator,
                 **_get_model_manifest_meta(model_key),
             }
             if extra_audit:
                 event.update(extra_audit)
             _append_audit_event(event)
+            _write_forensic_report(event)
 
         return _to_png_response(png_bytes, request_id)
     except (ValueError, UnidentifiedImageError) as exc:
@@ -245,6 +355,7 @@ async def _process_image_operation(
             "request_id": request_id,
             "operation": operation,
             "status": "client_error",
+            "operator": operator,
             "error": str(exc),
             **_get_model_manifest_meta(model_key),
         })
@@ -255,6 +366,7 @@ async def _process_image_operation(
             "request_id": request_id,
             "operation": operation,
             "status": "server_error",
+            "operator": operator,
             "error": str(exc),
             **_get_model_manifest_meta(model_key),
         })
@@ -332,6 +444,7 @@ async def upscale_image(request: Request, file: UploadFile = File(...), factor: 
             "request_id": request_id,
             "operation": "upscale",
             "status": "client_error",
+            "operator": _get_operator(request),
             "error": f"factor must be one of: {allowed}",
             "provided_factor": factor,
             **_get_model_manifest_meta("realesrgan"),
@@ -361,6 +474,56 @@ async def denoise_image(request: Request, file: UploadFile = File(...), level: s
         run_inference=lambda model, image: model.denoise(image, level=level),
         extra_audit={"level": level},
     )
+
+
+@app.get("/forensic/report/{request_id}")
+async def forensic_report(request_id: str):
+    """Fetch a generated forensic report by request_id."""
+    if not audit_enabled:
+        return _error(404, "Audit reporting is disabled")
+
+    normalized_request_id = _normalize_report_id(request_id)
+    if normalized_request_id is None:
+        return _error(422, "Invalid request_id format")
+
+    report_path = _get_audit_reports_dir() / f"{normalized_request_id}.json"
+    if not report_path.exists():
+        return _error(404, f"Report not found for request_id={normalized_request_id}")
+
+    try:
+        with report_path.open("r", encoding="utf-8") as inp:
+            payload = json.load(inp)
+    except Exception as exc:
+        logger.error("Failed to read forensic report %s: %s", report_path, exc)
+        return _error(500, "Failed to load report")
+
+    expected_digest = payload.get("integrity", {}).get("digest")
+    chain = payload.get("chain_of_custody", {})
+    integrity_scope = {
+        "request_id": payload.get("request_id"),
+        "operation": payload.get("operation"),
+        "status": payload.get("status"),
+        "operator": payload.get("operator"),
+        "input": payload.get("input"),
+        "output": payload.get("output"),
+        "processing": payload.get("processing"),
+        "model": payload.get("model"),
+        "chain_of_custody": {
+            "audit_log": chain.get("audit_log"),
+            "audit_timestamp": chain.get("audit_timestamp"),
+        },
+    }
+    digest_ok = expected_digest == _canonical_json_sha256(integrity_scope) if expected_digest else False
+
+    return {
+        "status": "ok",
+        "request_id": normalized_request_id,
+        "report": payload,
+        "integrity": {
+            "verified": digest_ok,
+            "algorithm": payload.get("integrity", {}).get("algorithm", "sha256"),
+        },
+    }
 
 
 if __name__ == "__main__":

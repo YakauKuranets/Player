@@ -10,7 +10,12 @@
     "postinstall": "node scripts/check-python.js && node scripts/download-models.js",
     "download-models": "node scripts/download-models.js",
     "check-updates": "node scripts/check-updates.js",
-    "update-models": "node scripts/update-models.js"
+    "update-models": "node scripts/update-models.js",
+    "ci:smoke": "node scripts/ci-smoke.js",
+    "test:api-client": "node scripts/test-api-client.js",
+    "test:job-params": "python3 scripts/test-job-params.py",
+    "test:task-status": "python3 scripts/test-task-status.py",
+    "test:cancel-route": "python3 scripts/test-cancel-route.py"
   },
   "build": {
     "appId": "com.playe.photolab",
