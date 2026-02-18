@@ -38,6 +38,7 @@ def load_cancel_fn():
         "HTTPException": HTTPException,
         "Depends": lambda x: x,
         "Request": object,
+        "_log_enterprise_action": lambda *_args, **_kwargs: None,
     }
     exec(compile(module, str(routes_path), "exec"), namespace)
     return namespace["cancel_job"], namespace
@@ -69,6 +70,7 @@ async def main():
     payload = await cancel_job(request=None, task_id="t-2", auth=None)
     assert payload["result"]["status"] == "cancel-unsupported"
     assert payload["result"]["is_final"] is False
+    assert payload["result"]["poll_after_ms"] == 1000
 
     print("[test-cancel-route] passed")
 
