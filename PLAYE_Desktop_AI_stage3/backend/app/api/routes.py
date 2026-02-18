@@ -18,6 +18,7 @@ from app.api.response import success_response
 from app.config import settings
 from app.db.database import SessionLocal
 from app.db.models import UserSession
+from app.audit.enterprise import log_action
 from app.queue.gpu_router import gpu_router
 from app.queue.tasks import (
     batch_denoise_task,
@@ -204,6 +205,29 @@ async def auth_required(request: Request) -> None:
     request.state.jwt_payload = payload
 
 
+
+
+def _log_enterprise_action(request: Request, action: str, details: dict | None = None, status: str = "success") -> None:
+    payload = getattr(request.state, "jwt_payload", {}) or {}
+    db = SessionLocal()
+    try:
+        user_id = payload.get("sub")
+        team_id = payload.get("team_id")
+        log_action(
+            db=db,
+            action=action,
+            user_id=int(user_id) if str(user_id).isdigit() else None,
+            team_id=int(team_id) if str(team_id).isdigit() else None,
+            details=details or {},
+            ip_address=request.client.host if request.client else None,
+            request_id=getattr(request.state, "request_id", None),
+            status=status,
+        )
+    except Exception:
+        pass
+    finally:
+        db.close()
+
 async def rate_limit(request: Request) -> None:
     ip = request.client.host if request.client else "anonymous"
     now = time.time()
@@ -308,6 +332,7 @@ async def submit_job(
     task_fn = task_map[operation]
     if hasattr(task_fn, "delay"):
         task_result = task_fn.delay(image_bytes, *extra_args)
+        _log_enterprise_action(request, "job_submit", {"operation": operation, "mode": "async", "params": normalized_params})
         return success_response(
             request,
             status="queued",
@@ -321,6 +346,7 @@ async def submit_job(
         )
 
     output = task_fn(image_bytes, *extra_args)
+    _log_enterprise_action(request, "job_submit", {"operation": operation, "mode": "sync", "params": normalized_params})
     return success_response(
         request,
         status="done",
@@ -354,6 +380,7 @@ async def submit_video_job(
     else:
         raise HTTPException(status_code=400, detail=f"Unknown video operation: {operation}")
 
+    _log_enterprise_action(request, "video_job_submit", {"operation": operation, "fps": fps, "filename": file.filename})
     return success_response(
         request,
         status="queued",
@@ -385,6 +412,7 @@ async def cancel_job(
         except Exception as err:
             raise HTTPException(status_code=500, detail="Unable to cancel task") from err
 
+    _log_enterprise_action(request, "job_cancel", {"task_id": task_id})
     return success_response(
         request,
         status="done",
@@ -431,6 +459,7 @@ async def submit_batch_job(
         _ = task_fn(*task_args)
         task_id = f"sync-{int(time.time() * 1000)}"
 
+    _log_enterprise_action(request, "batch_job_submit", {"operation": operation, "batch_size": len(files), "queue": queue})
     return success_response(
         request,
         status="queued",

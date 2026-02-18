@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.response import success_response
 from app.api.routes import auth_required
+from app.audit.enterprise import log_action
 from app.auth.service import create_user, login, revoke_session
 from app.config import settings
 from app.db.database import SessionLocal
@@ -23,6 +24,23 @@ def get_db():
     finally:
         db.close()
 
+
+
+
+def _audit_auth(request: Request, db: Session, action: str, details: dict | None = None, status: str = "success") -> None:
+    payload = getattr(request.state, "jwt_payload", {}) or {}
+    user_id = payload.get("sub")
+    team_id = payload.get("team_id")
+    log_action(
+        db=db,
+        action=action,
+        user_id=int(user_id) if str(user_id).isdigit() else None,
+        team_id=int(team_id) if str(team_id).isdigit() else None,
+        details=details or {},
+        ip_address=request.client.host if request.client else None,
+        request_id=getattr(request.state, "request_id", None),
+        status=status,
+    )
 
 class RegisterRequest(BaseModel):
     email: str
@@ -59,6 +77,7 @@ async def register(request: Request, payload: RegisterRequest, db: Session = Dep
     except Exception as exc:
         raise HTTPException(409, f"User already exists: {exc}") from exc
 
+    _audit_auth(request, db, "register", {"email": user.email, "role": user.role.value})
     return success_response(request, status="done", result={"id": user.id, "email": user.email, "username": user.username, "role": user.role.value})
 
 
@@ -68,7 +87,9 @@ async def auth_login(request: Request, payload: LoginRequest, db: Session = Depe
     ua = request.headers.get("User-Agent", "")
     token = login(db=db, email=payload.email, password=payload.password, ip=ip, user_agent=ua, jwt_secret=settings.JWT_SECRET)
     if not token:
+        _audit_auth(request, db, "login", {"email": payload.email}, status="failure")
         raise HTTPException(401, "Invalid credentials")
+    _audit_auth(request, db, "login", {"email": payload.email}, status="success")
     return success_response(request, status="done", result={"token": token})
 
 
@@ -80,6 +101,7 @@ async def auth_logout(request: Request, auth: None = Depends(auth_required)):
         db = SessionLocal()
         try:
             revoke_session(db, int(session_id))
+            _audit_auth(request, db, "logout", {"session_id": session_id})
         finally:
             db.close()
     return success_response(request, status="done", result={"message": "Logged out"})

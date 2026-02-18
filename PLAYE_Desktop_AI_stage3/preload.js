@@ -27,6 +27,41 @@ function decodeBase64ToBlob(base64Payload, mimeType = 'image/png') {
   return new Blob([bytes], { type: mimeType });
 }
 
+
+async function submitVideoAndPoll(videoFile, { operation = 'temporal_denoise', fps = 1.0, scene_threshold = 28.0, temporal_window = 3 } = {}) {
+  const formData = new FormData();
+  formData.append('file', videoFile);
+  formData.append('operation', operation);
+  formData.append('fps', String(fps));
+  formData.append('scene_threshold', String(scene_threshold));
+  formData.append('temporal_window', String(temporal_window));
+
+  const submitResp = await fetch(`${API_BASE}/job/video/submit`, {
+    method: 'POST',
+    headers: {
+      ...getAuthHeader(),
+    },
+    body: formData,
+  });
+
+  if (!submitResp.ok) throw new Error(`Video submit failed: ${submitResp.status}`);
+  const submitData = await submitResp.json();
+  const taskId = submitData?.result?.task_id;
+  if (!taskId) throw new Error('No task_id returned for video job');
+
+  for (let i = 0; i < 180; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const statusResp = await fetch(`${API_BASE}/job/${taskId}/status`, { headers: { ...getAuthHeader() } });
+    if (!statusResp.ok) throw new Error(`Video status check failed: ${statusResp.status}`);
+    const statusData = await statusResp.json();
+    const res = statusData?.result || {};
+    if (res.is_final && res.error) throw new Error(String(res.error));
+    if (res.is_final && !res.error) return res.result;
+  }
+
+  throw new Error('Timeout waiting for video job result');
+}
+
 async function submitAndPoll(operation, imageData, params = {}) {
   const image_base64 = await blobToBase64(imageData);
 
@@ -125,4 +160,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   enhanceFace: (imageData) => submitAndPoll('face_enhance', imageData),
   upscaleImage: (imageData, factor) => submitAndPoll('upscale', imageData, { factor }),
   denoiseImage: (imageData, level) => submitAndPoll('denoise', imageData, { level }),
+  temporalDenoiseVideo: (videoFile, fps = 1.0) => submitVideoAndPoll(videoFile, { operation: 'temporal_denoise', fps }),
+  detectVideoScenes: (videoFile, scene_threshold = 28.0, temporal_window = 3) => submitVideoAndPoll(videoFile, { operation: 'scene_detect', scene_threshold, temporal_window }),
 });
