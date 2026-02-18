@@ -92,7 +92,7 @@
 ## Прогресс по глобальному плану (оценка)
 
 - **Phase 1:** ~100% (request tracing + audit trail уже есть; внедрён unified response schema, базовые `/job/submit` + `/job/{task_id}/status`, frontend polling integration, расширенная обработка статусов job polling + unified state mapping (`queued/running/retry/done/failed/canceled`) + `is_final/poll_after_ms` hints for stable frontend polling, operator-driven cancel endpoint + UI control, pause/resume queue controls in UI + manual retry/clear terminal queue controls, baseline `ci:smoke` checks и workflow `ci-smoke` в GitHub Actions, configurable pipeline params, backend param validation тестами и scene-aware detect_objects params, плюс worker-based temporal denoise в frontend и preset-aware queue params, осталось полноценный queued orchestration под нагрузкой и расширенные quality checks в CI).
-- **Phase 2:** ~25% (добавлены forensic JSON reports по `request_id` с integrity-проверкой, операторскими метаданными и валидацией идентификатора отчёта; но video temporal pipeline и расширенные пресеты для stage-graph ещё не внедрены).
+- **Phase 2:** ~40% (усилен контур очереди Celery, добавлен реальный lazy-inference с graceful fallback для ключевых AI модулей, унифицирован preload на `/api/job/submit` + polling и подготовлен базовый Alembic scaffolding; но полноценный video temporal pipeline и автоматические forensic reports PDF ещё не внедрены).
 - **Phase 3:** ~0% (model governance, multi-node/multi-GPU orchestration и explainability пока не начинались).
 
 ## Реализация по этапам

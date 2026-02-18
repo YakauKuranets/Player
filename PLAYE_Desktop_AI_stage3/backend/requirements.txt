@@ -1,25 +1,34 @@
-# Python dependencies for the PLAYE PhotoLab desktop backend.
-# This list is based on the development plan in Инструкция_Desktop_AI.md.
-# It includes FastAPI and supporting libraries as well as the deep learning
-# frameworks required for the AI models. The versions are pinned for
-# reproducibility. Feel free to adjust these versions if installation
-# issues arise on specific platforms (e.g. Windows vs. Linux).
-
 fastapi==0.108.0
 uvicorn[standard]==0.25.0
 python-multipart==0.0.6
+pydantic-settings==2.1.0
 
-# PyTorch and vision libraries. On systems without CUDA a CPU-only build
-# of torch/torchvision can be used instead of the GPU-enabled versions.
+# Queue
+celery==5.3.6
+redis==5.0.1
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.13.0
+
+# PyTorch (CPU fallback — замени на GPU-версию при наличии CUDA)
 torch==2.1.0
 torchvision==0.16.0
-onnxruntime-gpu==1.16.0
+onnxruntime==1.16.0
 
-# Image processing utilities
-opencv-python==4.8.1.78
+# Image processing
+opencv-python-headless==4.8.1.78
 numpy==1.26.2
 Pillow==10.1.0
 
-# Misc utilities
+# AI models
+ultralytics==8.0.196
+retinaface==0.0.1
+basicsr==1.4.2
+gfpgan==1.3.8
+realesrgan==0.3.0
+
+# Utils
 requests==2.31.0
 tqdm==4.66.1

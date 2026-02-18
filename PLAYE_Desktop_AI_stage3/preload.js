@@ -1,53 +1,103 @@
 // Preload script to expose limited APIs to the renderer process.
-// This file acts as a bridge between Electron's main process and the
-// browser (renderer) context. It exposes a safe set of functions
-// through the `electronAPI` namespace using contextBridge.
-
 const { contextBridge, ipcRenderer } = require('electron');
 
+const API_BASE = 'http://127.0.0.1:8000/api';
+
+function getAuthHeader() {
+  const token = (globalThis.window && window._playeToken) ? window._playeToken : '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+async function blobToBase64(imageData) {
+  const arrayBuf = await imageData.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function decodeBase64ToBlob(base64Payload, mimeType = 'image/png') {
+  const binary = atob(base64Payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function submitAndPoll(operation, imageData, params = {}) {
+  const image_base64 = await blobToBase64(imageData);
+
+  const submitResp = await fetch(`${API_BASE}/job/submit`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader(),
+    },
+    body: JSON.stringify({ operation, image_base64, params }),
+  });
+
+  if (!submitResp.ok) {
+    throw new Error(`Submit failed: ${submitResp.status}`);
+  }
+
+  const submitData = await submitResp.json();
+  const taskId = submitData?.result?.task_id;
+  if (!taskId) {
+    throw new Error('No task_id returned');
+  }
+
+  for (let i = 0; i < 60; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const statusResp = await fetch(`${API_BASE}/job/${taskId}/status`, {
+      headers: {
+        ...getAuthHeader(),
+      },
+    });
+
+    if (!statusResp.ok) {
+      throw new Error(`Status check failed: ${statusResp.status}`);
+    }
+
+    const statusData = await statusResp.json();
+    const res = statusData?.result || {};
+
+    if (res.is_final && res.error) {
+      throw new Error(String(res.error));
+    }
+
+    if (res.is_final && !res.error) {
+      const payload = res.result;
+      if (typeof payload === 'string') {
+        return decodeBase64ToBlob(payload);
+      }
+      if (payload && typeof payload.image_base64 === 'string') {
+        return decodeBase64ToBlob(payload.image_base64);
+      }
+      throw new Error('Unexpected final result payload');
+    }
+  }
+
+  throw new Error('Timeout waiting for job result');
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
-  /**
-   * Check whether the Python backend is reachable. Returns a promise
-   * resolving to a boolean.
-   */
   checkPythonBackend: () => ipcRenderer.invoke('check-python-backend'),
-
-  /**
-   * Retrieve the path to the models directory used by the backend.
-   */
   getModelsPath: () => ipcRenderer.invoke('get-models-path'),
-
-  /**
-   * Trigger a check for model updates. Returns a promise with update info.
-   */
   checkModelUpdates: () => ipcRenderer.invoke('check-model-updates'),
-
-  /**
-   * Download all missing/new models based on checkModelUpdates().
-   */
   updateModels: () => ipcRenderer.invoke('update-models'),
 
-  /**
-   * Subscribe to model download progress events.
-   * Returns an unsubscribe function.
-   */
   onDownloadProgress: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('download-progress', handler);
     return () => ipcRenderer.removeListener('download-progress', handler);
   },
 
-  /**
-   * Download a specific model by name. Accepts a callback to report
-   * progress and returns a promise that resolves when the download
-   * completes.
-   *
-   * @param {string} modelName - Name of the model to download
-   * @param {function} onProgress - Callback with progress (0-100)
-   */
   downloadModel: (modelName, onProgress) => {
     return new Promise((resolve, reject) => {
-      const handler = (event, data) => {
+      const handler = (_event, data) => {
         if (data.modelName === modelName) {
           onProgress(data.progress);
           if (data.progress >= 100) {
@@ -69,74 +119,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
 
-  /**
-   * Open local models folder (userData/models) in the OS file explorer.
-   */
   openModelsFolder: () => ipcRenderer.invoke('open-models-folder'),
-
-  /**
-   * Show a native dialog with given options. Useful for error/info boxes.
-   */
   showDialog: (options) => ipcRenderer.invoke('show-dialog', options),
 
-  /**
-   * Wrapper for face enhancement AI call. Accepts a Blob or File and
-   * returns JSON result from the backend.
-   *
-   * @param {Blob|File} imageData - Image data to process
-   */
-  enhanceFace: async (imageData) => {
-    const formData = new FormData();
-    formData.append('file', imageData);
-    const response = await fetch('http://127.0.0.1:8000/ai/face-enhance', {
-      method: 'POST',
-      body: formData
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    // The backend returns a PNG stream. Convert it to a Blob so the
-    // renderer can display or save it.
-    return await response.blob();
-  },
-
-  /**
-   * Wrapper for image upscaling. Accepts an image and scale factor.
-   *
-   * @param {Blob|File} imageData - Image data to process
-   * @param {number} factor - Upscale factor
-   */
-  upscaleImage: async (imageData, factor) => {
-    const formData = new FormData();
-    formData.append('file', imageData);
-    formData.append('factor', factor.toString());
-    const response = await fetch('http://127.0.0.1:8000/ai/upscale', {
-      method: 'POST',
-      body: formData
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    return await response.blob();
-  },
-
-  /**
-   * Wrapper for image denoising. Accepts an image and noise level.
-   *
-   * @param {Blob|File} imageData - Image data to process
-   * @param {number} level - Denoise level
-   */
-  denoiseImage: async (imageData, level) => {
-    const formData = new FormData();
-    formData.append('file', imageData);
-    formData.append('level', level);
-    const response = await fetch('http://127.0.0.1:8000/ai/denoise', {
-      method: 'POST',
-      body: formData
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    return await response.blob();
-  }
+  enhanceFace: (imageData) => submitAndPoll('face_enhance', imageData),
+  upscaleImage: (imageData, factor) => submitAndPoll('upscale', imageData, { factor }),
+  denoiseImage: (imageData, level) => submitAndPoll('denoise', imageData, { level }),
 });
