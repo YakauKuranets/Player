@@ -72,6 +72,83 @@ DASHBOARD_CSV_FIELDS = [
     "audit_events_failure",
 ]
 
+MANIFEST_CSV_FIELDS = ["path", "format", "role", "description"]
+
+REPORTS_MANIFEST = [
+    {
+        "path": "/api/enterprise/reports/audit",
+        "format": "json",
+        "role": "admin",
+        "description": "Raw enterprise audit entries with filters and pagination",
+    },
+    {
+        "path": "/api/enterprise/reports/audit.csv",
+        "format": "csv",
+        "role": "admin",
+        "description": "CSV export of filtered enterprise audit entries",
+    },
+    {
+        "path": "/api/enterprise/reports/actions",
+        "format": "json",
+        "role": "analyst",
+        "description": "Action frequency ranking for selected team/time window",
+    },
+    {
+        "path": "/api/enterprise/reports/actions.csv",
+        "format": "csv",
+        "role": "analyst",
+        "description": "CSV export of action frequency ranking",
+    },
+    {
+        "path": "/api/enterprise/reports/timeseries",
+        "format": "json",
+        "role": "analyst",
+        "description": "Time-bucketed audit activity trend (success/failure)",
+    },
+    {
+        "path": "/api/enterprise/reports/timeseries.csv",
+        "format": "csv",
+        "role": "analyst",
+        "description": "CSV export of time-bucketed audit trend",
+    },
+    {
+        "path": "/api/enterprise/reports/dashboard",
+        "format": "json",
+        "role": "analyst",
+        "description": "Aggregated users/workspaces/audit event metrics",
+    },
+    {
+        "path": "/api/enterprise/reports/dashboard.csv",
+        "format": "csv",
+        "role": "analyst",
+        "description": "CSV snapshot of aggregated dashboard metrics",
+    },
+    {
+        "path": "/api/enterprise/reports/users/{user_id}/activity",
+        "format": "json",
+        "role": "admin",
+        "description": "Per-user audit activity summary + recent events",
+    },
+    {
+        "path": "/api/enterprise/reports/users/{user_id}/activity.csv",
+        "format": "csv",
+        "role": "admin",
+        "description": "CSV export of a user's recent activity events",
+    },
+    {
+        "path": "/api/enterprise/reports/manifest",
+        "format": "json",
+        "role": "analyst",
+        "description": "Catalog of all available enterprise report endpoints",
+    },
+    {
+        "path": "/api/enterprise/reports/manifest.csv",
+        "format": "csv",
+        "role": "analyst",
+        "description": "CSV export of enterprise report catalog",
+    },
+]
+
 
 def _parse_iso_utc(value: str | None, field_name: str) -> str | None:
     if value is None:
@@ -464,69 +541,7 @@ async def report_manifest(
     auth: None = Depends(auth_required),
     rbac: None = Depends(require_analyst),
 ):
-    reports = [
-        {
-            "path": "/api/enterprise/reports/audit",
-            "format": "json",
-            "role": "admin",
-            "description": "Raw enterprise audit entries with filters and pagination",
-        },
-        {
-            "path": "/api/enterprise/reports/audit.csv",
-            "format": "csv",
-            "role": "admin",
-            "description": "CSV export of filtered enterprise audit entries",
-        },
-        {
-            "path": "/api/enterprise/reports/actions",
-            "format": "json",
-            "role": "analyst",
-            "description": "Action frequency ranking for selected team/time window",
-        },
-        {
-            "path": "/api/enterprise/reports/actions.csv",
-            "format": "csv",
-            "role": "analyst",
-            "description": "CSV export of action frequency ranking",
-        },
-        {
-            "path": "/api/enterprise/reports/timeseries",
-            "format": "json",
-            "role": "analyst",
-            "description": "Time-bucketed audit activity trend (success/failure)",
-        },
-        {
-            "path": "/api/enterprise/reports/timeseries.csv",
-            "format": "csv",
-            "role": "analyst",
-            "description": "CSV export of time-bucketed audit trend",
-        },
-        {
-            "path": "/api/enterprise/reports/dashboard",
-            "format": "json",
-            "role": "analyst",
-            "description": "Aggregated users/workspaces/audit event metrics",
-        },
-        {
-            "path": "/api/enterprise/reports/dashboard.csv",
-            "format": "csv",
-            "role": "analyst",
-            "description": "CSV snapshot of aggregated dashboard metrics",
-        },
-        {
-            "path": "/api/enterprise/reports/users/{user_id}/activity",
-            "format": "json",
-            "role": "admin",
-            "description": "Per-user audit activity summary + recent events",
-        },
-        {
-            "path": "/api/enterprise/reports/users/{user_id}/activity.csv",
-            "format": "csv",
-            "role": "admin",
-            "description": "CSV export of a user's recent activity events",
-        },
-    ]
-
+    reports = list(REPORTS_MANIFEST)
     _audit_report_event(request, db, "report_manifest", {"reports": len(reports)})
     return success_response(
         request,
@@ -536,3 +551,16 @@ async def report_manifest(
             "generated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
+
+
+@router.get("/manifest.csv")
+async def report_manifest_csv(
+    request: Request,
+    db: Session = Depends(get_db),
+    auth: None = Depends(auth_required),
+    rbac: None = Depends(require_analyst),
+):
+    reports = list(REPORTS_MANIFEST)
+    _audit_report_event(request, db, "report_manifest_csv", {"reports": len(reports)})
+    csv_payload = _build_csv(reports, MANIFEST_CSV_FIELDS)
+    return _export_response(csv_payload, filename_prefix="enterprise_reports_manifest")
