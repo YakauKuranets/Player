@@ -1,50 +1,75 @@
-"""
-Real-ESRGAN upscaling module.
-
-This module defines a function to upscale images using a pretrained
-Real-ESRGAN model. In this simplified implementation the heavy Real-ESRGAN
-x4 weights are lazily initialised via a helper function; the actual
-inference step is not performed. Replace the implementation with real
-model loading and inference once the weights are available and PyTorch is
-properly configured.
-"""
+"""Real-ESRGAN upscaling module with graceful fallback."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import io
+import logging
 from pathlib import Path
+
+import numpy as np
+from PIL import Image
+import torch
 
 from .download_models import download_realesrgan_x4
 
-# Lazy initialisation of the Real-ESRGAN-x4 weights path. The model itself is
-# not loaded in this placeholder implementation.
-_realesrgan_path: Optional[Path] = None
+logger = logging.getLogger(__name__)
+
+_realesrgan_path: Path | None = None
+_upscaler_cache: dict[int, object] = {}
 
 
 def _ensure_realesrgan_weights() -> Path:
-    """Ensure that the Real-ESRGAN-x4 weights are present on disk.
-
-    Returns the path to the weights file. If the file does not exist, it
-    will be created as a placeholder via the ``download_realesrgan_x4``
-    function.
-    """
     global _realesrgan_path
     if _realesrgan_path is None:
         _realesrgan_path = download_realesrgan_x4()
     return _realesrgan_path
 
 
-async def upscale_image(image: Any, factor: int = 2) -> Any:
-    """Upscale the given image by a specified factor.
+def _get_upscaler(factor: int):
+    if factor in _upscaler_cache:
+        return _upscaler_cache[factor]
 
-    The function ensures the Real-ESRGAN-x4 weights are available and
-    returns the input image unchanged. In a full implementation, this
-    function would load the model and perform inference on the image.
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    from realesrgan import RealESRGANer
 
-    :param image: Image data (e.g., bytes or numpy array or PIL image)
-    :param factor: Upscale factor (default 2)
-    :return: Upscaled image (currently the same as input)
-    """
-    _ensure_realesrgan_weights()
-    # TODO: Load and run the Real-ESRGAN model on the image.
-    return image
+    model = RRDBNet(
+        num_in_ch=3,
+        num_out_ch=3,
+        num_feat=64,
+        num_block=23,
+        num_grow_ch=32,
+        scale=4,
+    )
+    weights_path = str(_ensure_realesrgan_weights())
+
+    upscaler = RealESRGANer(
+        scale=4,
+        model_path=weights_path,
+        model=model,
+        tile=512,
+        tile_pad=10,
+        pre_pad=0,
+        half=torch.cuda.is_available(),
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
+    _upscaler_cache[factor] = upscaler
+    return upscaler
+
+
+async def upscale_image(image: bytes, factor: int = 2) -> bytes:
+    weights = _ensure_realesrgan_weights()
+    if weights.stat().st_size < 1_000_000:
+        return image
+
+    try:
+        img_pil = Image.open(io.BytesIO(image)).convert("RGB")
+        img_np = np.array(img_pil)
+        upscaler = _get_upscaler(factor)
+        output_np, _ = upscaler.enhance(img_np, outscale=factor)
+        output_pil = Image.fromarray(output_np)
+        buf = io.BytesIO()
+        output_pil.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as exc:  # pragma: no cover - depends on optional heavy deps
+        logger.warning("Real-ESRGAN unavailable, fallback to original image: %s", exc)
+        return image

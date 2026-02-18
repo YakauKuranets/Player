@@ -1,52 +1,80 @@
-"""
-GFPGAN/RestoreFormer face enhancement module.
-
-This module defines a function to enhance faces using a pretrained model. It
-includes a lazy loader for the RestoreFormer++ weights. In this reference
-implementation, the actual model inference is not performed; instead, the
-module ensures that the model weights exist on disk and then returns the
-input image unchanged. In a production environment, you would load the
-PyTorch model (e.g. with ``torch.load`` or ``torch.jit.load``) and run
-inference on the image.
-"""
+"""GFPGAN/RestoreFormer face enhancement module with graceful fallback."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+import logging
 from pathlib import Path
+
+import numpy as np
+import torch
 
 from .download_models import download_restoreformer_pp
 
-# Path to the RestoreFormer++ weights. This will be initialised when the
-# model is first requested. In this simplified implementation we only
-# verify that the file exists.
-_restoreformer_path: Optional[Path] = None
+logger = logging.getLogger(__name__)
+
+_restoreformer_path: Path | None = None
+_gfpgan_model = None
 
 
 def _ensure_restoreformer_weights() -> Path:
-    """Ensure that the RestoreFormer++ weights are present on disk.
-
-    Returns the path to the weights file. If the file does not exist, it
-    will be created as a placeholder via the ``download_restoreformer_pp``
-    function.
-    """
     global _restoreformer_path
     if _restoreformer_path is None:
-        # Create the weights file if it doesn't exist (placeholder)
         _restoreformer_path = download_restoreformer_pp()
     return _restoreformer_path
 
 
-async def enhance_face(image: Any) -> Any:
-    """Enhance the face in the given image.
+def _load_gfpgan():
+    global _gfpgan_model
+    if _gfpgan_model is not None:
+        return _gfpgan_model
 
-    This function ensures that the RestoreFormer++ weights are available and
-    then returns the image unchanged. Replace the body of this function
-    with real inference code once the heavy model can be loaded.
+    weights_path = _ensure_restoreformer_weights()
+    if weights_path.stat().st_size < 1_000_000:
+        return None
 
-    :param image: Image data (e.g., bytes or numpy array or PIL image)
-    :return: Enhanced image (currently the same as input)
-    """
-    _ensure_restoreformer_weights()
-    # TODO: Load and run the GFPGAN or RestoreFormer model on the image.
-    return image
+    from gfpgan import GFPGANer
+
+    model = GFPGANer(
+        model_path=str(weights_path),
+        upscale=1,
+        arch="RestoreFormer",
+        channel_multiplier=2,
+        bg_upsampler=None,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
+    _gfpgan_model = model
+    return model
+
+
+async def enhance_face(image: bytes) -> bytes:
+    try:
+        model = _load_gfpgan()
+        if model is None:
+            return image
+
+        try:
+            import cv2
+        except Exception:
+            return image
+
+        img_np = cv2.imdecode(np.frombuffer(image, np.uint8), cv2.IMREAD_COLOR)
+        if img_np is None:
+            return image
+
+        _, _, restored_img = model.enhance(
+            img_np,
+            has_aligned=False,
+            only_center_face=False,
+            paste_back=True,
+        )
+
+        if restored_img is None:
+            return image
+
+        ok, buf = cv2.imencode(".png", restored_img)
+        if not ok:
+            return image
+        return buf.tobytes()
+    except Exception as exc:  # pragma: no cover - depends on optional heavy deps
+        logger.warning("GFPGAN unavailable, fallback to original image: %s", exc)
+        return image
