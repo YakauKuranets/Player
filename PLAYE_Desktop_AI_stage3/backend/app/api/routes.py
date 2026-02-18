@@ -406,13 +406,20 @@ async def cancel_job(
     auth: None = Depends(auth_required),
 ):
     result = AsyncResult(task_id)
-    if hasattr(result, "revoke"):
-        try:
-            result.revoke(terminate=False)
-        except Exception as err:
-            raise HTTPException(status_code=500, detail="Unable to cancel task") from err
+    if not hasattr(result, "revoke"):
+        _log_enterprise_action(request, "job_cancel", {"task_id": task_id, "status": "unsupported"})
+        return success_response(
+            request,
+            status="done",
+            result={"task_id": task_id, "status": "cancel-unsupported", "is_final": False, "poll_after_ms": 1000},
+        )
 
-    _log_enterprise_action(request, "job_cancel", {"task_id": task_id})
+    try:
+        result.revoke(terminate=False)
+    except Exception as err:
+        raise HTTPException(status_code=500, detail="Unable to cancel task") from err
+
+    _log_enterprise_action(request, "job_cancel", {"task_id": task_id, "status": "canceled"})
     return success_response(
         request,
         status="done",

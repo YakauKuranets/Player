@@ -15,7 +15,10 @@
     "test:api-client": "node scripts/test-api-client.js",
     "test:job-params": "python3 scripts/test-job-params.py",
     "test:task-status": "python3 scripts/test-task-status.py",
-    "test:cancel-route": "python3 scripts/test-cancel-route.py"
+    "test:cancel-route": "python3 scripts/test-cancel-route.py",
+    "test:enterprise-report-filters": "python3 scripts/test-enterprise-report-filters.py",
+    "test:rbac-route-matching": "python3 scripts/test-rbac-route-matching.py",
+    "test:enterprise-report-schema": "python3 scripts/test-enterprise-report-schema.py"
   },
   "build": {
     "appId": "com.playe.photolab",
