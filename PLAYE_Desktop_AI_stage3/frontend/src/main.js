@@ -1,5 +1,5 @@
 import { Orchestrator } from "./orchestrator.js";
-import { formatTime, toHex } from "./utils.js";
+import { formatTime, hashFileStream } from "./utils.js";
 import { createPlaylistBlueprint } from "./blueprints/playlist.js";
 import { createPlayerBlueprint } from "./blueprints/player.js";
 import { createScreenshotBlueprint } from "./blueprints/screenshot.js";
@@ -9,6 +9,11 @@ import { createMotionBlueprint } from "./blueprints/motion.js";
 import { createForensicBlueprint } from "./blueprints/forensic.js";
 import { createTimelineBlueprint } from "./blueprints/timeline.js";
 import { createAiBlueprint } from "./blueprints/ai.js";
+import { createHypothesisBlueprint } from "./blueprints/hypothesis.js";
+import { createPhotoBlueprint } from "./blueprints/photo.js";
+import { createCompareBlueprint } from "./blueprints/compare.js";
+import { createEnterpriseBlueprint } from "./blueprints/enterprise.js";
+import { createApiClient } from "./api-client.js";
 
 const elements = {
   fileInput: document.getElementById("file-input"),
@@ -87,6 +92,22 @@ const elements = {
   modelsUpdateButton: document.getElementById("models-update"),
   modelsOpenFolderButton: document.getElementById("models-open-folder"),
   modelsStatus: document.getElementById("models-status"),
+  hypothesisGenerateButton: document.getElementById("hypothesis-generate"),
+  hypothesisExportButton: document.getElementById("hypothesis-export"),
+  hypothesisStatus: document.getElementById("hypothesis-status"),
+  hypothesisList: document.getElementById("hypothesis-list"),
+  photoSourceInput: document.getElementById("photo-source-input"),
+  photoBlendButton: document.getElementById("photo-blend"),
+  photoDownloadButton: document.getElementById("photo-download"),
+  photoStatus: document.getElementById("photo-status"),
+  photoCanvas: document.getElementById("photo-canvas"),
+  compareLeftInput: document.getElementById("compare-left-input"),
+  compareRightInput: document.getElementById("compare-right-input"),
+  compareSplitInput: document.getElementById("compare-split"),
+  compareSplitValue: document.getElementById("compare-split-value"),
+  compareRenderButton: document.getElementById("compare-render"),
+  compareStatus: document.getElementById("compare-status"),
+  compareCanvas: document.getElementById("compare-canvas"),
   timeline: document.getElementById("timeline"),
   timelineMarkers: document.getElementById("timeline-markers"),
   timelineCurrent: document.getElementById("timeline-current"),
@@ -106,6 +127,10 @@ const elements = {
   exportFfmpegJobButton: document.getElementById("export-ffmpeg-job"),
   downloadFfmpegJobButton: document.getElementById("download-ffmpeg-job"),
   queueFfmpegJobButton: document.getElementById("queue-ffmpeg-job"),
+  pipelinePauseButton: document.getElementById("pipeline-pause"),
+  pipelineResumeButton: document.getElementById("pipeline-resume"),
+  pipelineRetryFailedButton: document.getElementById("pipeline-retry-failed"),
+  pipelineClearTerminalButton: document.getElementById("pipeline-clear-terminal"),
   ffmpegJobPreview: document.getElementById("ffmpeg-job-preview"),
   pipelineStatus: document.getElementById("pipeline-status"),
   pipelineProgress: document.getElementById("pipeline-progress"),
@@ -131,6 +156,43 @@ const elements = {
   markerList: document.getElementById("marker-list"),
   markerType: document.getElementById("marker-type"),
   markerNote: document.getElementById("marker-note"),
+  apiBaseUrl: document.getElementById("api-base-url"),
+  apiToken: document.getElementById("api-token"),
+  apiConnectButton: document.getElementById("api-connect"),
+  apiCancelCurrentButton: document.getElementById("api-cancel-current"),
+  apiConnectionStatus: document.getElementById("api-connection-status"),
+  apiOperation: document.getElementById("api-operation"),
+  apiPreset: document.getElementById("api-preset"),
+  apiApplyPresetButton: document.getElementById("api-apply-preset"),
+  apiUpscaleFactor: document.getElementById("api-upscale-factor"),
+  apiDenoiseLevel: document.getElementById("api-denoise-level"),
+  // Enterprise elements
+  loginEmail: document.getElementById("login-email"),
+  loginPassword: document.getElementById("login-password"),
+  loginButton: document.getElementById("login-button"),
+  logoutButton: document.getElementById("logout-button"),
+  loginStatus: document.getElementById("login-status"),
+  dashboardPanel: document.getElementById("enterprise-dashboard"),
+  dashboardRefreshButton: document.getElementById("enterprise-dashboard-refresh"),
+  gpuStatusButton: document.getElementById("gpu-status-refresh"),
+  gpuStatusPanel: document.getElementById("gpu-status-panel"),
+  usersTableBody: document.getElementById("enterprise-users-tbody"),
+  usersRefreshButton: document.getElementById("enterprise-users-refresh"),
+  teamNameInput: document.getElementById("team-name-input"),
+  teamDescInput: document.getElementById("team-desc-input"),
+  teamCreateButton: document.getElementById("team-create-button"),
+  teamIdInput: document.getElementById("team-id-input"),
+  teamUserIdInput: document.getElementById("team-user-id-input"),
+  teamAddUserButton: document.getElementById("team-add-user-button"),
+  teamsPanel: document.getElementById("enterprise-teams-panel"),
+  teamsRefreshButton: document.getElementById("enterprise-teams-refresh"),
+  auditTableBody: document.getElementById("enterprise-audit-tbody"),
+  auditRefreshButton: document.getElementById("enterprise-audit-refresh"),
+  auditExportCsvButton: document.getElementById("enterprise-audit-csv"),
+  auditLimitInput: document.getElementById("enterprise-audit-limit"),
+  auditActionFilter: document.getElementById("enterprise-audit-action"),
+  timeseriesPanel: document.getElementById("enterprise-timeseries"),
+  timeseriesRefreshButton: document.getElementById("enterprise-timeseries-refresh"),
 };
 
 const state = {
@@ -171,8 +233,20 @@ const state = {
   pipelineJobs: [],
   pipelineNextJobId: 1,
   pipelineProcessing: false,
+  pipelinePaused: false,
   pipelineErrors: [],
   pipelineMaxRetries: 2,
+  hypothesisClips: [],
+  backendApi: {
+    enabled: false,
+    baseUrl: "http://127.0.0.1:8000/api",
+    token: "",
+    client: null,
+    operation: "detect_objects",
+    preset: "balanced",
+    upscaleFactor: 2,
+    denoiseLevel: "medium",
+  },
 };
 
 const createLogItem = ({ timestamp, caseId, owner, action, message }) => {
@@ -196,7 +270,11 @@ const createPipelineItem = (job) => {
     `status: ${job.status}`,
     `stage: ${job.stage}`,
     `source: ${job.hasSource ? "yes" : "no"}`,
+    `op: ${job.operation || "detect_objects"}`,
+    `preset: ${job.preset || "balanced"}`,
+    `params: ${JSON.stringify(job.params || {})}`,
     `progress: ${job.progress ?? 0}%`,
+    `backend: ${job.backendStatus || "n/a"}`,
   ];
   if (job.error) {
     details.push(`error: ${job.error}`);
@@ -204,6 +282,86 @@ const createPipelineItem = (job) => {
   item.textContent = details.join(" | ");
   return item;
 };
+
+
+
+const blobToBase64 = (blob) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = String(reader.result || "");
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Не удалось сериализовать кадр"));
+    reader.readAsDataURL(blob);
+  });
+
+const captureCurrentFrameBase64 = async () => {
+  if (!elements.video.videoWidth || !elements.video.videoHeight) {
+    return null;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = elements.video.videoWidth;
+  canvas.height = elements.video.videoHeight;
+  const context = canvas.getContext("2d");
+  context.drawImage(elements.video, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) return null;
+  return blobToBase64(blob);
+};
+
+
+const applyBackendPresetToControls = (preset) => {
+  const normalizedPreset = String(preset || "balanced").toLowerCase();
+  const presetMap = {
+    forensic_safe: { upscaleFactor: "2", denoiseLevel: "light" },
+    balanced: { upscaleFactor: "4", denoiseLevel: "medium" },
+    presentation: { upscaleFactor: "8", denoiseLevel: "heavy" },
+  };
+  const selected = presetMap[normalizedPreset] || presetMap.balanced;
+  if (elements.apiUpscaleFactor) {
+    elements.apiUpscaleFactor.value = selected.upscaleFactor;
+  }
+  if (elements.apiDenoiseLevel) {
+    elements.apiDenoiseLevel.value = selected.denoiseLevel;
+  }
+};
+
+const buildBackendParamsByOperation = (operation) => {
+  if (operation === "upscale") {
+    const factor = Number.parseInt(elements.apiUpscaleFactor?.value || "2", 10);
+    return {
+      preset: state.backendApi.preset,
+      factor: Number.isFinite(factor) ? factor : 2,
+    };
+  }
+  if (operation === "denoise") {
+    const level = elements.apiDenoiseLevel?.value || "light";
+    return { preset: state.backendApi.preset, level };
+  }
+  if (operation === "detect_objects") {
+    const sceneThreshold = Number.parseFloat(elements.aiSceneThreshold?.value || "28");
+    const temporalWindow = Number.parseInt(elements.temporalWindowInput?.value || "3", 10);
+    return {
+      preset: state.backendApi.preset,
+      scene_threshold: Number.isFinite(sceneThreshold) ? sceneThreshold : 28,
+      temporal_window: Number.isFinite(temporalWindow) ? temporalWindow : 3,
+    };
+  }
+  return { preset: state.backendApi.preset };
+};
+
+
+const findActiveBackendJob = () =>
+  [...state.pipelineJobs]
+    .reverse()
+    .find(
+      (job) =>
+        job.backendTaskId &&
+        ["pending", "running"].includes(job.status) &&
+        !["done", "failed", "canceled", "cancel-unsupported"].includes(job.backendStatus)
+    );
 
 const createPipelineErrorItem = (entry) => {
   const item = document.createElement("li");
@@ -431,6 +589,7 @@ const actions = {
     const runningJobs = state.pipelineJobs.filter((job) => job.status === "running");
     const done = state.pipelineJobs.filter((job) => job.status === "done").length;
     const failed = state.pipelineJobs.filter((job) => job.status === "failed").length;
+    const canceled = state.pipelineJobs.filter((job) => job.status === "canceled").length;
     const running = runningJobs.length;
 
     const activeProgress = runningJobs.length ? runningJobs[0].progress ?? 0 : 0;
@@ -441,10 +600,15 @@ const actions = {
       elements.pipelineProgressLabel.textContent = `${activeProgress}%`;
     }
 
-    elements.pipelineStatus.textContent = `Pipeline: pending ${pending}, running ${running}, done ${done}, failed ${failed}.`;
+    const pausedSuffix = state.pipelinePaused ? " [paused]" : "";
+    elements.pipelineStatus.textContent = `Pipeline: pending ${pending}, running ${running}, done ${done}, failed ${failed}, canceled ${canceled}.${pausedSuffix}`;
     actions.renderPipelineErrors();
   },
-  processNextPipelineJob: () => {
+  processNextPipelineJob: async () => {
+    if (state.pipelinePaused) {
+      actions.renderPipelineJobs();
+      return;
+    }
     if (state.pipelineProcessing) return;
     const nextJob = state.pipelineJobs.find((job) => job.status === "pending");
     if (!nextJob) {
@@ -454,14 +618,135 @@ const actions = {
     state.pipelineProcessing = true;
     nextJob.status = "running";
     nextJob.startedAt = new Date().toISOString();
-    nextJob.progress = 0;
+    nextJob.progress = 5;
     actions.renderPipelineJobs();
     actions.recordLog("pipeline-job-running", `Запущена обработка job-${nextJob.id}`, {
       jobId: nextJob.id,
       stage: nextJob.stage,
       attempt: nextJob.attempt,
       maxRetries: nextJob.maxRetries,
+      backendEnabled: state.backendApi.enabled,
     });
+
+    const finishAndContinue = () => {
+      state.pipelineProcessing = false;
+      actions.renderPipelineJobs();
+      actions.processNextPipelineJob();
+    };
+
+    const markFailed = (errorCode) => {
+      nextJob.error = errorCode;
+      nextJob.backendStatus = "failed";
+      const errorEntry = actions.appendPipelineError(nextJob, nextJob.error);
+      const canRetry = nextJob.attempt <= nextJob.maxRetries;
+      if (canRetry) {
+        nextJob.status = "pending";
+        nextJob.progress = 0;
+        nextJob.lastErrorAt = errorEntry.timestamp;
+        nextJob.attempt += 1;
+        actions.recordLog("pipeline-job-retry", `Pipeline job-${nextJob.id} повторно поставлен в очередь`, {
+          jobId: nextJob.id,
+          error: nextJob.error,
+          nextAttempt: nextJob.attempt,
+          maxRetries: nextJob.maxRetries,
+        });
+      } else {
+        nextJob.status = "failed";
+        nextJob.progress = 100;
+        nextJob.finishedAt = new Date().toISOString();
+        actions.recordLog("pipeline-job-failed", `Pipeline job-${nextJob.id} завершен с ошибкой`, {
+          jobId: nextJob.id,
+          error: nextJob.error,
+          attemptsUsed: nextJob.attempt,
+          maxRetries: nextJob.maxRetries,
+        });
+      }
+    };
+
+    if (state.backendApi.enabled && state.backendApi.client) {
+      try {
+        const frameBase64 = await captureCurrentFrameBase64();
+        if (!frameBase64) {
+          markFailed("source-missing");
+          finishAndContinue();
+          return;
+        }
+
+        const submit = await state.backendApi.client.submitJob({
+          operation: nextJob.operation || "detect_objects",
+          image_base64: frameBase64,
+          params: nextJob.params || buildBackendParamsByOperation(nextJob.operation || "detect_objects"),
+        });
+        const taskId = submit?.result?.task_id;
+        if (!taskId) {
+          throw new Error("task_id-missing");
+        }
+
+        nextJob.backendTaskId = taskId;
+        nextJob.backendStatus = "queued";
+        nextJob.progress = 20;
+        actions.renderPipelineJobs();
+
+        const polled = await state.backendApi.client.pollJobUntilFinal(taskId, {
+          maxAttempts: 25,
+          intervalMs: 600,
+          onProgress: ({ status, progress, payload }) => {
+            nextJob.backendStatus = status;
+            nextJob.progress = Number.isFinite(progress) ? progress : nextJob.progress;
+            if (["pending", "queued", "running", "started", "progress", "retry"].includes(status)) {
+              nextJob.status = "running";
+            }
+            if (status === "canceled") {
+              nextJob.status = "canceled";
+            }
+            if (payload?.meta) {
+              nextJob.backendMeta = payload.meta;
+            }
+            actions.renderPipelineJobs();
+          },
+        });
+
+        if (polled.final === "success") {
+          nextJob.status = "done";
+          nextJob.backendStatus = "done";
+          nextJob.progress = 100;
+          nextJob.finishedAt = new Date().toISOString();
+          actions.recordLog("pipeline-job-done", `Pipeline job-${nextJob.id} завершен через backend`, {
+            jobId: nextJob.id,
+            taskId,
+            backendStatus: nextJob.backendStatus,
+            backendMeta: nextJob.backendMeta || null,
+          });
+          finishAndContinue();
+          return;
+        }
+
+        if (polled.final === "failure") {
+          if (String(polled?.payload?.status || "") === "canceled") {
+            nextJob.status = "canceled";
+            nextJob.backendStatus = "canceled";
+            nextJob.error = polled?.payload?.error || "canceled-by-operator";
+            nextJob.progress = 100;
+            nextJob.finishedAt = new Date().toISOString();
+            actions.recordLog("pipeline-job-canceled", `Pipeline job-${nextJob.id} отменен`, {
+              jobId: nextJob.id,
+              taskId,
+              error: nextJob.error,
+            });
+          } else {
+            markFailed(polled?.payload?.error || "backend-failed");
+          }
+          finishAndContinue();
+          return;
+        }
+
+        markFailed("backend-timeout");
+      } catch (error) {
+        markFailed(error?.message || "backend-submit-error");
+      }
+      finishAndContinue();
+      return;
+    }
 
     const progressTimer = window.setInterval(() => {
       if (nextJob.status !== "running") {
@@ -477,42 +762,16 @@ const actions = {
       window.clearInterval(progressTimer);
       if (nextJob.hasSource) {
         nextJob.status = "done";
+        nextJob.backendStatus = "mock-done";
         nextJob.progress = 100;
         nextJob.finishedAt = new Date().toISOString();
-        actions.recordLog("pipeline-job-done", `Pipeline job-${nextJob.id} завершен`, {
+        actions.recordLog("pipeline-job-done", `Pipeline job-${nextJob.id} завершен (mock)`, {
           jobId: nextJob.id,
         });
       } else {
-        nextJob.error = "source-missing";
-        const errorEntry = actions.appendPipelineError(nextJob, nextJob.error);
-        const canRetry = nextJob.attempt <= nextJob.maxRetries;
-
-        if (canRetry) {
-          nextJob.status = "pending";
-          nextJob.progress = 0;
-          nextJob.lastErrorAt = errorEntry.timestamp;
-          nextJob.attempt += 1;
-          actions.recordLog("pipeline-job-retry", `Pipeline job-${nextJob.id} повторно поставлен в очередь`, {
-            jobId: nextJob.id,
-            error: nextJob.error,
-            nextAttempt: nextJob.attempt,
-            maxRetries: nextJob.maxRetries,
-          });
-        } else {
-          nextJob.status = "failed";
-          nextJob.progress = 100;
-          nextJob.finishedAt = new Date().toISOString();
-          actions.recordLog("pipeline-job-failed", `Pipeline job-${nextJob.id} завершен с ошибкой`, {
-            jobId: nextJob.id,
-            error: nextJob.error,
-            attemptsUsed: nextJob.attempt,
-            maxRetries: nextJob.maxRetries,
-          });
-        }
+        markFailed("source-missing");
       }
-      state.pipelineProcessing = false;
-      actions.renderPipelineJobs();
-      actions.processNextPipelineJob();
+      finishAndContinue();
     }, 1200);
   },
   enqueuePipelineJob: (jobPayload, stage = "3.3.2") => {
@@ -525,6 +784,10 @@ const actions = {
       attempt: 1,
       maxRetries: state.pipelineMaxRetries,
       hasSource: Boolean(jobPayload?.source),
+      operation: state.backendApi.operation,
+      preset: state.backendApi.preset,
+      backendStatus: "created",
+      params: buildBackendParamsByOperation(state.backendApi.operation),
     };
     state.pipelineNextJobId += 1;
     state.pipelineJobs.push(job);
@@ -533,9 +796,55 @@ const actions = {
       jobId: job.id,
       stage,
       hasSource: job.hasSource,
+      operation: job.operation,
+      preset: job.preset,
+      params: job.params,
     });
     actions.processNextPipelineJob();
     return job;
+  },
+  pausePipelineQueue: () => {
+    state.pipelinePaused = true;
+    actions.renderPipelineJobs();
+    actions.recordLog("pipeline-paused", "Очередь pipeline поставлена на паузу", {
+      pending: state.pipelineJobs.filter((job) => job.status === "pending").length,
+      running: state.pipelineJobs.filter((job) => job.status === "running").length,
+    });
+  },
+  resumePipelineQueue: () => {
+    state.pipelinePaused = false;
+    actions.renderPipelineJobs();
+    actions.recordLog("pipeline-resumed", "Очередь pipeline возобновлена", {
+      pending: state.pipelineJobs.filter((job) => job.status === "pending").length,
+    });
+    actions.processNextPipelineJob();
+  },
+  retryFailedPipelineJobs: () => {
+    const failedJobs = state.pipelineJobs.filter((job) => job.status === "failed");
+    failedJobs.forEach((job) => {
+      job.status = "pending";
+      job.error = null;
+      job.progress = 0;
+      job.backendStatus = "retry-manual";
+      job.attempt += 1;
+    });
+    actions.renderPipelineJobs();
+    actions.recordLog("pipeline-retry-failed", "Повтор failed задач очереди", {
+      retried: failedJobs.length,
+    });
+    actions.processNextPipelineJob();
+  },
+  clearTerminalPipelineJobs: () => {
+    const before = state.pipelineJobs.length;
+    state.pipelineJobs = state.pipelineJobs.filter(
+      (job) => !["done", "failed", "canceled"].includes(job.status)
+    );
+    const removed = before - state.pipelineJobs.length;
+    actions.renderPipelineJobs();
+    actions.recordLog("pipeline-clear-terminal", "Очистка завершенных задач очереди", {
+      removed,
+      remaining: state.pipelineJobs.length,
+    });
   },
   refreshCaseLibraryOptions: (query = "") => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -662,11 +971,7 @@ const actions = {
       id: selectedId,
     });
   },
-  hashFile: async (file) => {
-    const data = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-    return toHex(hashBuffer);
-  },
+  hashFile: async (file) => hashFileStream(file),
 };
 
 const orchestrator = new Orchestrator({ elements, state, actions });
@@ -680,8 +985,128 @@ orchestrator.register(createMotionBlueprint());
 orchestrator.register(createForensicBlueprint());
 orchestrator.register(createTimelineBlueprint());
 orchestrator.register(createAiBlueprint());
+orchestrator.register(createHypothesisBlueprint());
+orchestrator.register(createPhotoBlueprint());
+orchestrator.register(createCompareBlueprint());
+orchestrator.register(createEnterpriseBlueprint());
 
 orchestrator.start();
+initControlTabs();
+initBackendApiPanel();
+
+
+function initControlTabs() {
+  const buttons = Array.from(document.querySelectorAll(".tab-button"));
+  const panels = Array.from(document.querySelectorAll(".tab-panel"));
+  if (!buttons.length || !panels.length) {
+    return;
+  }
+
+  const activateTab = (target) => {
+    buttons.forEach((button) => {
+      button.classList.toggle("active", button.dataset.tabTarget === target);
+    });
+
+    panels.forEach((panel) => {
+      panel.classList.toggle("active", panel.classList.contains(target));
+    });
+  };
+
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => activateTab(button.dataset.tabTarget));
+  });
+
+  const defaultTab = buttons.find((button) => button.classList.contains("active"))?.dataset.tabTarget || "tab-basic";
+  activateTab(defaultTab);
+}
+
+
+function initBackendApiPanel() {
+  if (!elements.apiBaseUrl || !elements.apiConnectButton || !elements.apiConnectionStatus) return;
+
+  elements.apiBaseUrl.value = state.backendApi.baseUrl;
+  elements.apiToken.value = state.backendApi.token;
+  if (elements.apiPreset) {
+    elements.apiPreset.value = state.backendApi.preset;
+  }
+  applyBackendPresetToControls(state.backendApi.preset);
+
+  const setStatus = (message) => {
+    elements.apiConnectionStatus.textContent = message;
+  };
+
+  elements.apiApplyPresetButton?.addEventListener("click", () => {
+    const preset = elements.apiPreset?.value || "balanced";
+    state.backendApi.preset = preset;
+    applyBackendPresetToControls(preset);
+    state.backendApi.upscaleFactor = Number.parseInt(elements.apiUpscaleFactor?.value || "2", 10) || 2;
+    state.backendApi.denoiseLevel = elements.apiDenoiseLevel?.value || "light";
+    setStatus(`Preset применен: ${preset}.`);
+  });
+
+  elements.apiCancelCurrentButton?.addEventListener("click", async () => {
+    if (!state.backendApi.enabled || !state.backendApi.client) {
+      setStatus("Backend queue не подключен.");
+      return;
+    }
+
+    const activeJob = findActiveBackendJob();
+    if (!activeJob || !activeJob.backendTaskId) {
+      setStatus("Нет активной backend job для отмены.");
+      return;
+    }
+
+    try {
+      const response = await state.backendApi.client.cancelJob(activeJob.backendTaskId);
+      const status = response?.result?.status || "canceled";
+      activeJob.backendStatus = status;
+      if (status === "canceled") {
+        activeJob.status = "canceled";
+        activeJob.error = "canceled-by-operator";
+        activeJob.progress = 100;
+        activeJob.finishedAt = new Date().toISOString();
+      }
+      actions.renderPipelineJobs();
+      setStatus(`Cancel response: ${status} (job-${activeJob.id}).`);
+      actions.recordLog("pipeline-job-cancel", `Отмена pipeline job-${activeJob.id}`, {
+        jobId: activeJob.id,
+        taskId: activeJob.backendTaskId,
+        cancelStatus: status,
+      });
+    } catch (error) {
+      setStatus(`Не удалось отменить job: ${error?.message || "unknown"}`);
+    }
+  });
+
+  elements.apiConnectButton.addEventListener("click", async () => {
+    const baseUrl = elements.apiBaseUrl.value.trim() || state.backendApi.baseUrl;
+    const token = elements.apiToken.value.trim();
+
+    state.backendApi.baseUrl = baseUrl;
+    state.backendApi.token = token;
+    state.backendApi.client = createApiClient({ baseUrl, token });
+
+    try {
+      await state.backendApi.client.ping();
+      state.backendApi.enabled = true;
+      state.backendApi.operation = elements.apiOperation?.value || state.backendApi.operation;
+      state.backendApi.preset = elements.apiPreset?.value || state.backendApi.preset;
+      setStatus(`Backend queue: подключен (${state.backendApi.operation}, preset: ${state.backendApi.preset}).`);
+      state.backendApi.upscaleFactor = Number.parseInt(elements.apiUpscaleFactor?.value || "2", 10) || 2;
+      state.backendApi.denoiseLevel = elements.apiDenoiseLevel?.value || "light";
+      actions.recordLog("backend-connect", "Подключение к backend queue успешно", {
+        baseUrl,
+        operation: state.backendApi.operation,
+        preset: state.backendApi.preset,
+        upscaleFactor: state.backendApi.upscaleFactor,
+        denoiseLevel: state.backendApi.denoiseLevel,
+      });
+    } catch (_error) {
+      state.backendApi.enabled = false;
+      setStatus("Backend queue: не удалось подключиться, работает mock fallback.");
+    }
+  });
+}
 
 // -----------------------------
 // Models panel (Desktop only)

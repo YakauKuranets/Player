@@ -1,0 +1,75 @@
+name: ci-smoke
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Install Python dependencies (lite — без тяжёлых AI пакетов)
+        run: |
+          pip install --upgrade pip
+          pip install fastapi uvicorn pydantic-settings sqlalchemy alembic \
+                      celery redis python-multipart requests bcrypt \
+                      numpy Pillow 2>/dev/null || true
+
+      - name: Run JS smoke checks
+        run: npm run ci:smoke
+
+      - name: Python — импорт модулей backend
+        run: |
+          cd backend
+          PLAYE_ALLOW_INSECURE_JWT=1 python -c "
+          import sys
+          sys.path.insert(0, '.')
+          from app.api.response import success_response, error_response
+          from app.api.rbac import endpoint_required_role, ROLE_HIERARCHY
+          from app.queue.gpu_router import GpuRouter
+          from app.queue.batch import images_to_batch_tensor, batch_tensor_to_images
+          from app.auth.service import _hash_password, _verify_password, _make_jwt
+          print('Backend imports OK')
+          "
+
+      - name: Python — тест RBAC route matching
+        run: |
+          cd PLAYE_Desktop_AI_stage3
+          PLAYE_ALLOW_INSECURE_JWT=1 python scripts/test-rbac-route-matching.py
+
+      - name: Python — тест enterprise report schema
+        run: |
+          cd PLAYE_Desktop_AI_stage3
+          PLAYE_ALLOW_INSECURE_JWT=1 python scripts/test-enterprise-report-schema.py
+
+      - name: Python — тест enterprise report filters
+        run: |
+          cd PLAYE_Desktop_AI_stage3
+          PLAYE_ALLOW_INSECURE_JWT=1 python scripts/test-enterprise-report-filters.py
+
+      - name: Python — тест job params validation
+        run: |
+          cd PLAYE_Desktop_AI_stage3
+          PLAYE_ALLOW_INSECURE_JWT=1 python scripts/test-job-params.py
+
+      - name: Python — тест task status
+        run: |
+          cd PLAYE_Desktop_AI_stage3
+          PLAYE_ALLOW_INSECURE_JWT=1 python scripts/test-task-status.py

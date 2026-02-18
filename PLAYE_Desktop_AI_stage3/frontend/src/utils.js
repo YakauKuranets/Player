@@ -21,3 +21,29 @@ export const toHex = (buffer) =>
   Array.from(new Uint8Array(buffer))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+
+export const hashFileStream = async (file, onProgress) => {
+  const reader = file.stream().getReader();
+  const chunks = [];
+  let loaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    loaded += value.byteLength;
+    if (onProgress) {
+      onProgress(Math.round((loaded / file.size) * 100));
+    }
+  }
+
+  const combined = new Uint8Array(loaded);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  });
+
+  const digest = await crypto.subtle.digest("SHA-256", combined.buffer);
+  return toHex(digest);
+};

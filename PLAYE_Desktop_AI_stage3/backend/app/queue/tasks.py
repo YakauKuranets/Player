@@ -1,100 +1,126 @@
-"""
-Celery tasks for PLAYE PhotoLab backend.
-
-This module defines asynchronous tasks that wrap the heavy AI models. The
-tasks are executed by the Celery worker defined in ``worker.py``. For now
-the tasks simply forward the image data to the corresponding model
-functions and return the result. When integrating with real PyTorch models
-you would perform the heavy computation here and write outputs to disk or
-a blob store.
-"""
+"""Celery tasks for PLAYE PhotoLab backend."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
-try:
-    # Celery is an optional dependency. In development environments where
-    # Celery is not installed, we define a minimal stub so that this module
-    # can still be imported without raising ImportError. The stub mimics
-    # enough of the Celery API used here to decorate functions but does
-    # not provide any actual task queue functionality.
-    from celery import Celery  # type: ignore
-except ImportError:  # pragma: no cover
-    class Celery:  # type: ignore
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def task(self, name: str = None, **opts):  # type: ignore
-            def decorator(fn):
-                return fn
-            return decorator
-
-        def send_task(self, *args, **kwargs):  # type: ignore
-            raise RuntimeError("Celery is not available")
-
-from app.models.face_enhance import enhance_face
-from app.models.upscale import upscale_image
 from app.models.denoise import denoise_image
 from app.models.detect_faces import detect_faces
 from app.models.detect_objects import detect_objects
+from app.models.face_enhance import enhance_face
+from app.models.upscale import upscale_image
+from app.models.video_pipeline import detect_scene_changes, extract_frames, process_video_frames
+from app.queue.worker import celery_app
 
-# Celery application will be configured in worker.py. Note: tasks are
-# registered on the shared ``celery_app`` defined in worker.py.
-celery_app = Celery('playe_photo_lab')
+TASK_RETRY_OPTS = {
+    "autoretry_for": (Exception,),
+    "retry_backoff": True,
+    "retry_jitter": False,
+    "max_retries": 3,
+}
 
 
-@celery_app.task(name='tasks.face_enhance')
+def _encode_image_result(result: Any) -> Any:
+    if isinstance(result, (bytes, bytearray)):
+        return {"image_base64": base64.b64encode(bytes(result)).decode("ascii"), "mime_type": "image/png"}
+    return result
+
+
+def _decode_images_b64(images_b64: list[str]) -> list[bytes]:
+    return [base64.b64decode(v) for v in images_b64]
+
+
+def _encode_images_b64(images: list[bytes]) -> list[str]:
+    return [base64.b64encode(v).decode("ascii") for v in images]
+
+
+@celery_app.task(name="tasks.face_enhance", **TASK_RETRY_OPTS)
 def face_enhance_task(image: bytes) -> Any:
-    """Celery task to enhance faces.
-
-    This synchronous wrapper calls the asynchronous ``enhance_face``
-    function using ``asyncio.run``. The input image is expected to be
-    raw bytes. The result is returned as-is; when integrating real models
-    you might return processed bytes or store the output to a file and
-    return a path.
-    """
-    return asyncio.run(enhance_face(image))
+    return _encode_image_result(asyncio.run(enhance_face(image)))
 
 
-@celery_app.task(name='tasks.upscale')
+@celery_app.task(name="tasks.upscale", **TASK_RETRY_OPTS)
 def upscale_task(image: bytes, factor: int = 2) -> Any:
-    """Celery task to upscale images.
-
-    :param image: The raw image bytes to upscale.
-    :param factor: The upscale factor.
-    :return: The upscaled image (currently unchanged).
-    """
-    return asyncio.run(upscale_image(image, factor))
+    return _encode_image_result(asyncio.run(upscale_image(image, factor)))
 
 
-@celery_app.task(name='tasks.denoise')
-def denoise_task(image: bytes, level: str = 'light') -> Any:
-    """Celery task to denoise images.
-
-    :param image: The raw image bytes to denoise.
-    :param level: The denoising level ('light', 'medium', 'heavy').
-    :return: The denoised image (currently unchanged).
-    """
-    return asyncio.run(denoise_image(image, level))
+@celery_app.task(name="tasks.denoise", **TASK_RETRY_OPTS)
+def denoise_task(image: bytes, level: str = "light") -> Any:
+    return _encode_image_result(asyncio.run(denoise_image(image, level)))
 
 
-@celery_app.task(name='tasks.detect_faces')
+@celery_app.task(name="tasks.detect_faces", **TASK_RETRY_OPTS)
 def detect_faces_task(image: bytes) -> Any:
-    """Celery task to detect faces in an image.
-
-    :param image: The raw image bytes.
-    :return: A list of detected faces (currently empty).
-    """
     return asyncio.run(detect_faces(image))
 
 
-@celery_app.task(name='tasks.detect_objects')
-def detect_objects_task(image: bytes) -> Any:
-    """Celery task to detect objects in an image.
+@celery_app.task(name="tasks.detect_objects", **TASK_RETRY_OPTS)
+def detect_objects_task(image: bytes, scene_threshold: float | None = None, temporal_window: int | None = None) -> Any:
+    return asyncio.run(
+        detect_objects(image, scene_threshold=scene_threshold, temporal_window=temporal_window)
+    )
 
-    :param image: The raw image bytes.
-    :return: A list of detected objects (currently empty).
-    """
-    return asyncio.run(detect_objects(image))
+
+@celery_app.task(name="tasks.video_temporal_denoise", **TASK_RETRY_OPTS)
+def video_temporal_denoise_task(video: bytes, fps: float = 1.0) -> Any:
+    async def _run():
+        return await process_video_frames(
+            video_bytes=video,
+            operation="temporal_denoise",
+            params={},
+            frame_processor=lambda frame, _: denoise_image(frame, "medium"),
+            fps=fps,
+        )
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name="tasks.video_scene_detect", **TASK_RETRY_OPTS)
+def video_scene_detect_task(video: bytes, scene_threshold: float = 28.0, temporal_window: int = 3) -> Any:
+    async def _run():
+        frames = await extract_frames(video, fps=2.0)
+        scenes = await detect_scene_changes(frames, threshold=scene_threshold)
+        scene_objects = []
+        for idx in scenes:
+            if idx < len(frames):
+                objs = await detect_objects(
+                    frames[idx],
+                    scene_threshold=scene_threshold,
+                    temporal_window=temporal_window,
+                )
+                scene_objects.append({"frame": idx, "objects": objs})
+        return {"total_frames": len(frames), "scene_cuts": scenes, "scene_objects": scene_objects}
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name="tasks.batch_upscale", **TASK_RETRY_OPTS)
+def batch_upscale_task(images_b64: list[str], factor: int = 2) -> Any:
+    async def _run():
+        imgs = _decode_images_b64(images_b64)
+        outs = [await upscale_image(img, factor) for img in imgs]
+        return {"images_base64": _encode_images_b64(outs), "count": len(outs)}
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name="tasks.batch_denoise", **TASK_RETRY_OPTS)
+def batch_denoise_task(images_b64: list[str], level: str = "medium") -> Any:
+    async def _run():
+        imgs = _decode_images_b64(images_b64)
+        outs = [await denoise_image(img, level) for img in imgs]
+        return {"images_base64": _encode_images_b64(outs), "count": len(outs)}
+
+    return asyncio.run(_run())
+
+
+@celery_app.task(name="tasks.batch_face_enhance", **TASK_RETRY_OPTS)
+def batch_face_enhance_task(images_b64: list[str]) -> Any:
+    async def _run():
+        imgs = _decode_images_b64(images_b64)
+        outs = [await enhance_face(img) for img in imgs]
+        return {"images_base64": _encode_images_b64(outs), "count": len(outs)}
+
+    return asyncio.run(_run())
