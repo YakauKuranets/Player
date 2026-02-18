@@ -8,19 +8,25 @@ import hmac
 import json
 import logging
 import time
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, List, Tuple
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.api.response import success_response
 from app.config import settings
+from app.queue.gpu_router import gpu_router
 from app.queue.tasks import (
+    batch_denoise_task,
+    batch_face_enhance_task,
+    batch_upscale_task,
     denoise_task,
     detect_faces_task,
     detect_objects_task,
     face_enhance_task,
     upscale_task,
+    video_scene_detect_task,
+    video_temporal_denoise_task,
 )
 
 try:
@@ -36,18 +42,13 @@ except ImportError:  # pragma: no cover
 RATE_LIMIT = 1.0
 _request_times: Dict[str, float] = {}
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
 class JobSubmitRequest(BaseModel):
-    """Submit payload for async job processing."""
-
-    operation: str = Field(..., description="AI operation name")
-    image_base64: str = Field(..., description="Input image bytes encoded with base64")
+    operation: str = Field(...)
+    image_base64: str = Field(...)
     params: Dict[str, Any] = Field(default_factory=dict)
-
-
 
 
 PRESET_DEFAULTS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -70,7 +71,6 @@ PRESET_DEFAULTS: Dict[str, Dict[str, Dict[str, Any]]] = {
 
 
 def normalize_job_params(operation: str, raw_params: Dict[str, Any]) -> Tuple[str, List[Any], Dict[str, Any]]:
-    """Validate and normalize params for a job operation."""
     params = dict(raw_params or {})
     normalized: Dict[str, Any] = {}
 
@@ -86,54 +86,37 @@ def normalize_job_params(operation: str, raw_params: Dict[str, Any]) -> Tuple[st
 
     if operation == "face_enhance":
         return operation, [], normalized
-
     if operation == "upscale":
-        factor = merged_params.get("factor", 2)
-        if not isinstance(factor, int):
-            try:
-                factor = int(factor)
-            except Exception as err:
-                raise HTTPException(status_code=400, detail="upscale.factor must be an integer") from err
+        factor = int(merged_params.get("factor", 2))
         if factor not in {2, 4, 8}:
             raise HTTPException(status_code=400, detail="upscale.factor must be one of 2, 4, 8")
         normalized["factor"] = factor
         return operation, [factor], normalized
-
     if operation == "denoise":
         level = str(merged_params.get("level", "light")).lower().strip()
         if level not in {"light", "medium", "heavy"}:
             raise HTTPException(status_code=400, detail="denoise.level must be one of light, medium, heavy")
         normalized["level"] = level
         return operation, [level], normalized
-
     if operation == "detect_faces":
         return operation, [], normalized
-
     if operation == "detect_objects":
         scene_threshold = merged_params.get("scene_threshold", None)
         temporal_window = merged_params.get("temporal_window", None)
-
         if scene_threshold is not None:
-            try:
-                scene_threshold = float(scene_threshold)
-            except Exception as err:
-                raise HTTPException(status_code=400, detail="detect_objects.scene_threshold must be numeric") from err
+            scene_threshold = float(scene_threshold)
             if scene_threshold < 0 or scene_threshold > 100:
                 raise HTTPException(status_code=400, detail="detect_objects.scene_threshold must be between 0 and 100")
             normalized["scene_threshold"] = scene_threshold
-
         if temporal_window is not None:
-            try:
-                temporal_window = int(temporal_window)
-            except Exception as err:
-                raise HTTPException(status_code=400, detail="detect_objects.temporal_window must be integer") from err
+            temporal_window = int(temporal_window)
             if temporal_window < 1 or temporal_window > 12:
                 raise HTTPException(status_code=400, detail="detect_objects.temporal_window must be between 1 and 12")
             normalized["temporal_window"] = temporal_window
-
         return operation, [normalized.get("scene_threshold"), normalized.get("temporal_window")], normalized
 
     raise HTTPException(status_code=400, detail=f"Unsupported operation: {operation}")
+
 
 def _base64url_decode(input_str: str) -> bytes:
     padding = "=" * (-len(input_str) % 4)
@@ -154,11 +137,7 @@ def verify_jwt(token: str) -> dict:
 
     if not hmac.compare_digest(expected_sig, signature):
         raise ValueError("Invalid token signature")
-
-    try:
-        return json.loads(payload_bytes.decode("utf-8"))
-    except json.JSONDecodeError as err:
-        raise ValueError("Invalid payload") from err
+    return json.loads(payload_bytes.decode("utf-8"))
 
 
 async def auth_required(request: Request) -> None:
@@ -166,10 +145,7 @@ async def auth_required(request: Request) -> None:
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     token = auth_header.split(" ", 1)[1].strip()
-    try:
-        request.state.jwt_payload = verify_jwt(token)
-    except Exception as err:
-        raise HTTPException(status_code=401, detail="Invalid token") from err
+    request.state.jwt_payload = verify_jwt(token)
 
 
 async def rate_limit(request: Request) -> None:
@@ -193,77 +169,34 @@ def _to_task_status(async_result: AsyncResult, task_id: str) -> Dict[str, Any]:
         "FAILURE": "failed",
         "REVOKED": "canceled",
     }
-    default_progress = {
-        "PENDING": 0,
-        "RECEIVED": 5,
-        "STARTED": 15,
-        "RETRY": 10,
-        "PROGRESS": 25,
-        "SUCCESS": 100,
-        "FAILURE": 100,
-        "REVOKED": 100,
-    }
-
     response: Dict[str, Any] = {
         "task_id": task_id,
         "status": status_map.get(state, state.lower()),
         "raw_state": state,
-        "progress": default_progress.get(state, 0),
+        "progress": 0,
         "result": None,
         "error": None,
         "meta": None,
         "is_final": False,
         "poll_after_ms": 600,
     }
-
-    info = getattr(async_result, "info", None)
-    if isinstance(info, dict):
-        if "progress" in info:
-            try:
-                response["progress"] = max(0, min(100, int(info.get("progress", response["progress"]))))
-            except Exception:
-                pass
-        response["meta"] = {
-            "stage": info.get("stage"),
-            "message": info.get("message"),
-            "attempt": info.get("attempt"),
-        }
-
     if state == "SUCCESS":
         response["result"] = async_result.result
-
     if state in {"SUCCESS", "FAILURE", "REVOKED"}:
         response["is_final"] = True
         response["poll_after_ms"] = 0
-
-    if state == "RETRY":
-        response["poll_after_ms"] = 900
-    elif state in {"PENDING", "RECEIVED"}:
-        response["poll_after_ms"] = 700
-
     if state in {"FAILURE", "REVOKED"}:
-        response["error"] = str(async_result.result or info)
-
+        response["error"] = str(async_result.result)
     return response
 
 
 @router.get("/hello")
 async def hello_world(request: Request):
-    return success_response(
-        request,
-        status="done",
-        result={"message": "Hello from PLAYE PhotoLab backend!"},
-    )
+    return success_response(request, status="done", result={"message": "Hello from PLAYE PhotoLab backend!"})
 
 
 @router.post("/job/submit")
-async def submit_job(
-    request: Request,
-    payload: JobSubmitRequest,
-    auth: None = Depends(auth_required),
-    limiter: None = Depends(rate_limit),
-):
-    """Unified async job submit endpoint for Phase 1A queue orchestration."""
+async def submit_job(request: Request, payload: JobSubmitRequest, auth: None = Depends(auth_required), limiter: None = Depends(rate_limit)):
     operation, extra_args, normalized_params = normalize_job_params(payload.operation, payload.params)
     task_map = {
         "face_enhance": face_enhance_task,
@@ -272,229 +205,77 @@ async def submit_job(
         "detect_faces": detect_faces_task,
         "detect_objects": detect_objects_task,
     }
-
-    try:
-        image_bytes = base64.b64decode(payload.image_base64)
-    except Exception as err:
-        raise HTTPException(status_code=400, detail="Invalid image_base64 payload") from err
-
+    image_bytes = base64.b64decode(payload.image_base64)
     task_fn = task_map[operation]
-
     if hasattr(task_fn, "delay"):
         task_result = task_fn.delay(image_bytes, *extra_args)
-        return success_response(
-            request,
-            status="queued",
-            status_code=202,
-            result={
-                "task_id": task_result.id,
-                "operation": operation,
-                "status": "pending",
-                "params": normalized_params,
-            },
-        )
+        return success_response(request, status="queued", status_code=202, result={"task_id": task_result.id, "operation": operation, "status": "pending", "params": normalized_params})
 
     output = task_fn(image_bytes, *extra_args)
-    return success_response(
-        request,
-        status="done",
-        result={
-            "task_id": f"sync-{int(time.time() * 1000)}",
-            "operation": operation,
-            "status": "done",
-            "params": normalized_params,
-            "result": output,
-        },
-    )
+    return success_response(request, status="done", result={"task_id": f"sync-{int(time.time() * 1000)}", "operation": operation, "status": "done", "params": normalized_params, "result": output})
 
 
-
-
-@router.post("/job/{task_id}/cancel")
-async def cancel_job(
+@router.post("/job/video/submit")
+async def submit_video_job(
     request: Request,
-    task_id: str,
+    file: UploadFile = File(...),
+    operation: str = Form("temporal_denoise"),
+    fps: float = Form(1.0),
+    scene_threshold: float = Form(28.0),
+    temporal_window: int = Form(3),
     auth: None = Depends(auth_required),
+    limiter: None = Depends(rate_limit),
 ):
-    """Cancel queued/running job when broker supports revoke."""
-    result = AsyncResult(task_id)
+    video_bytes = await file.read()
+    if operation == "temporal_denoise":
+        task_result = video_temporal_denoise_task.delay(video_bytes, fps)
+    elif operation == "scene_detect":
+        task_result = video_scene_detect_task.delay(video_bytes, scene_threshold, temporal_window)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown video operation: {operation}")
+    return success_response(request, status="queued", status_code=202, result={"task_id": task_result.id, "operation": operation, "filename": file.filename})
 
-    if hasattr(result, "revoke"):
-        try:
-            result.revoke(terminate=False)
-        except Exception as err:  # pragma: no cover
-            raise HTTPException(status_code=500, detail="Unable to cancel task") from err
-        return success_response(
-            request,
-            status="done",
-            result={
-                "task_id": task_id,
-                "status": "canceled",
-                "is_final": True,
-                "poll_after_ms": 0,
-            },
-        )
 
-    return success_response(
-        request,
-        status="done",
-        result={
-            "task_id": task_id,
-            "status": "cancel-unsupported",
-            "is_final": False,
-            "poll_after_ms": 800,
-        },
-    )
 @router.get("/job/{task_id}/status")
-async def get_job_status_v2(
-    request: Request,
-    task_id: str,
-    auth: None = Depends(auth_required),
-):
-    """Unified status polling endpoint for queued jobs."""
+async def get_job_status_v2(request: Request, task_id: str, auth: None = Depends(auth_required)):
     result = AsyncResult(task_id)
     return success_response(request, status="done", result=_to_task_status(result, task_id))
 
 
-@router.post("/ai/face-enhance")
-async def api_face_enhance(
-    request: Request,
-    file: UploadFile = File(...),
-    auth: None = Depends(auth_required),
-    limiter: None = Depends(rate_limit),
-):
-    logger.info("[face-enhance] Processing request from %s", file.filename)
-    image_bytes = await file.read()
-    if hasattr(face_enhance_task, "delay"):
-        task_result = face_enhance_task.delay(image_bytes)
-        return success_response(
-            request,
-            status="queued",
-            result={"task_id": task_result.id, "filename": file.filename},
-            status_code=202,
-        )
-
-    result_data = face_enhance_task(image_bytes)
-    return success_response(
-        request,
-        status="done",
-        result={"result": result_data, "filename": file.filename},
-    )
-
-
-@router.post("/ai/upscale")
-async def api_upscale(
-    request: Request,
-    file: UploadFile = File(...),
-    factor: int = 2,
-    auth: None = Depends(auth_required),
-    limiter: None = Depends(rate_limit),
-):
-    logger.info("[upscale] Processing request from %s (factor=%s)", file.filename, factor)
-    image_bytes = await file.read()
-    if hasattr(upscale_task, "delay"):
-        task_result = upscale_task.delay(image_bytes, factor)
-        return success_response(
-            request,
-            status="queued",
-            result={"task_id": task_result.id, "filename": file.filename, "factor": factor},
-            status_code=202,
-        )
-
-    result_data = upscale_task(image_bytes, factor)
-    return success_response(
-        request,
-        status="done",
-        result={"result": result_data, "filename": file.filename, "factor": factor},
-    )
-
-
-@router.post("/ai/denoise")
-async def api_denoise(
-    request: Request,
-    file: UploadFile = File(...),
-    level: str = "light",
-    auth: None = Depends(auth_required),
-    limiter: None = Depends(rate_limit),
-):
-    logger.info("[denoise] Processing request from %s (level=%s)", file.filename, level)
-    image_bytes = await file.read()
-    if hasattr(denoise_task, "delay"):
-        task_result = denoise_task.delay(image_bytes, level)
-        return success_response(
-            request,
-            status="queued",
-            result={"task_id": task_result.id, "filename": file.filename, "level": level},
-            status_code=202,
-        )
-
-    result_data = denoise_task(image_bytes, level)
-    return success_response(
-        request,
-        status="done",
-        result={"result": result_data, "filename": file.filename, "level": level},
-    )
-
-
-@router.post("/ai/detect-faces")
-async def api_detect_faces(
-    request: Request,
-    file: UploadFile = File(...),
-    auth: None = Depends(auth_required),
-    limiter: None = Depends(rate_limit),
-):
-    logger.info("[detect-faces] Processing request from %s", file.filename)
-    image_bytes = await file.read()
-    if hasattr(detect_faces_task, "delay"):
-        task_result = detect_faces_task.delay(image_bytes)
-        return success_response(
-            request,
-            status="queued",
-            result={"task_id": task_result.id, "filename": file.filename},
-            status_code=202,
-        )
-
-    faces = detect_faces_task(image_bytes)
-    return success_response(
-        request,
-        status="done",
-        result={"faces": faces, "filename": file.filename},
-    )
-
-
-@router.post("/ai/detect-objects")
-async def api_detect_objects(
-    request: Request,
-    file: UploadFile = File(...),
-    auth: None = Depends(auth_required),
-    limiter: None = Depends(rate_limit),
-):
-    logger.info("[detect-objects] Processing request from %s", file.filename)
-    image_bytes = await file.read()
-    if hasattr(detect_objects_task, "delay"):
-        task_result = detect_objects_task.delay(image_bytes)
-        return success_response(
-            request,
-            status="queued",
-            result={"task_id": task_result.id, "filename": file.filename},
-            status_code=202,
-        )
-
-    objects = detect_objects_task(image_bytes)
-    return success_response(
-        request,
-        status="done",
-        result={"objects": objects, "filename": file.filename},
-    )
-
-
-@router.get("/jobs/{task_id}")
-async def get_job_status(
-    request: Request,
-    task_id: str,
-    auth: None = Depends(auth_required),
-):
-    logger.info("[jobs] Checking status for task %s", task_id)
+@router.post("/job/{task_id}/cancel")
+async def cancel_job(request: Request, task_id: str, auth: None = Depends(auth_required)):
     result = AsyncResult(task_id)
-    payload = _to_task_status(result, task_id)
-    return success_response(request, status="done", result=payload)
+    if hasattr(result, "revoke"):
+        result.revoke(terminate=False)
+    return success_response(request, status="done", result={"task_id": task_id, "status": "canceled", "is_final": True, "poll_after_ms": 0})
+
+
+@router.get("/system/gpu")
+async def gpu_status(request: Request, auth: None = Depends(auth_required)):
+    return success_response(request, status="done", result={"gpus": gpu_router.status(), "strategy": "least_loaded"})
+
+
+@router.post("/job/batch/submit")
+async def submit_batch_job(
+    request: Request,
+    operation: str = Form(...),
+    files: list[UploadFile] = File(...),
+    auth: None = Depends(auth_required),
+    limiter: None = Depends(rate_limit),
+):
+    images_b64 = [base64.b64encode(await f.read()).decode() for f in files]
+    queue = gpu_router.get_best_queue()
+    batch_task_map = {
+        "upscale": batch_upscale_task,
+        "denoise": batch_denoise_task,
+        "face_enhance": batch_face_enhance_task,
+    }
+    task_fn = batch_task_map.get(operation)
+    if task_fn is None:
+        raise HTTPException(400, f"Unsupported batch operation: {operation}")
+
+    if hasattr(task_fn, "apply_async"):
+        task_result = task_fn.apply_async(args=[images_b64], queue=queue)
+    else:
+        task_result = type("Result", (), {"id": f"sync-{int(time.time() * 1000)}"})
+    return success_response(request, status="queued", status_code=202, result={"task_id": task_result.id, "operation": operation, "batch_size": len(files), "queue": queue})
