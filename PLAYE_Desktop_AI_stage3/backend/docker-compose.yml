@@ -1,52 +1,99 @@
-version: '3.8'
+version: '3.9'
 
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   backend:
     build: .
     ports:
       - "8000:8000"
     environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - DATABASE_URL=postgresql://playelab:password@postgres:5432/playelab
       - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./app:/app/app
-      - ./models:/models
+      - DATABASE_URL=postgresql://playe:playe@postgres:5432/playelab
+      - JWT_SECRET=${JWT_SECRET}
+      - CUDA_VISIBLE_DEVICES=0,1
+      - PLAYE_ALLOW_INSECURE_JWT=1
     depends_on:
-      - postgres
       - redis
-    runtime: nvidia  # Requires nvidia-docker
-    
-  postgres:
-    image: postgres:15
+      - postgres
+    volumes:
+      - models_data:/models
+      - reports_data:/reports
+
+  worker_gpu0:
+    build: .
+    command: celery -A app.queue.worker worker -Q gpu_0 --concurrency=1 --loglevel=info
     environment:
-      - POSTGRES_USER=playelab
-      - POSTGRES_PASSWORD=password
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://playe:playe@postgres:5432/playelab
+      - CUDA_VISIBLE_DEVICES=0
+      - PLAYE_ALLOW_INSECURE_JWT=1
+    depends_on:
+      - redis
+    volumes:
+      - models_data:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+
+  worker_gpu1:
+    build: .
+    command: celery -A app.queue.worker worker -Q gpu_1 --concurrency=1 --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CUDA_VISIBLE_DEVICES=1
+      - PLAYE_ALLOW_INSECURE_JWT=1
+    depends_on:
+      - redis
+    volumes:
+      - models_data:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['1']
+              capabilities: [gpu]
+
+  worker_cpu:
+    build: .
+    command: celery -A app.queue.worker worker -Q cpu --concurrency=4 --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PLAYE_ALLOW_INSECURE_JWT=1
+    depends_on:
+      - redis
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=playe
+      - POSTGRES_PASSWORD=playe
       - POSTGRES_DB=playelab
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-  
-  redis:
-    image: redis:7
+
+  flower:
+    image: mher/flower:2.0
+    command: celery flower --broker=redis://redis:6379/0
     ports:
-      - "6379:6379"
-  
-  celery_worker:
-    build: .
-    command: celery -A app.queue.worker worker --loglevel=info
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - DATABASE_URL=postgresql://playelab:password@postgres:5432/playelab
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - ./app:/app/app
-      - ./models:/models
+      - "5555:5555"
     depends_on:
-      - postgres
       - redis
-    runtime: nvidia
 
 volumes:
+  redis_data:
   postgres_data:
+  models_data:
+  reports_data:
