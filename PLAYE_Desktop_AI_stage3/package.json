@@ -4,8 +4,8 @@
   "description": "Криминалистическая лаборатория для видео и фото (desktop version)",
   "main": "electron.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
+    "start": "node ./node_modules/electron/cli.js .",
+    "dev": "node ./node_modules/electron/cli.js . --dev",
     "build": "electron-builder",
     "postinstall": "node scripts/check-python.js && node scripts/download-models.js",
     "download-models": "node scripts/download-models.js",
