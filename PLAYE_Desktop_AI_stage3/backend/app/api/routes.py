@@ -330,9 +330,17 @@ async def submit_job(
         raise HTTPException(status_code=400, detail="Invalid image_base64 payload") from err
 
     task_fn = task_map[operation]
-    if hasattr(task_fn, "delay"):
-        task_result = task_fn.delay(image_bytes, *extra_args)
-        _log_enterprise_action(request, "job_submit", {"operation": operation, "mode": "async", "params": normalized_params})
+    if hasattr(task_fn, "apply_async"):
+        queue = gpu_router.get_best_queue()
+        task_result = task_fn.apply_async(
+            args=[image_bytes, *extra_args],
+            queue=queue,
+        )
+        _log_enterprise_action(
+            request,
+            "job_submit",
+            {"operation": operation, "mode": "async", "params": normalized_params, "queue": queue},
+        )
         return success_response(
             request,
             status="queued",
@@ -342,6 +350,7 @@ async def submit_job(
                 "operation": operation,
                 "status": "pending",
                 "params": normalized_params,
+                "queue": queue,
             },
         )
 
@@ -373,19 +382,25 @@ async def submit_video_job(
 ):
     video_bytes = await file.read()
 
+    queue = gpu_router.get_best_queue()
+
     if operation == "temporal_denoise":
-        task_result = video_temporal_denoise_task.delay(video_bytes, fps)
+        task_result = video_temporal_denoise_task.apply_async(args=[video_bytes, fps], queue=queue)
     elif operation == "scene_detect":
-        task_result = video_scene_detect_task.delay(video_bytes, scene_threshold, temporal_window)
+        task_result = video_scene_detect_task.apply_async(args=[video_bytes, scene_threshold, temporal_window], queue=queue)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown video operation: {operation}")
 
-    _log_enterprise_action(request, "video_job_submit", {"operation": operation, "fps": fps, "filename": file.filename})
+    _log_enterprise_action(
+        request,
+        "video_job_submit",
+        {"operation": operation, "fps": fps, "filename": file.filename, "queue": queue},
+    )
     return success_response(
         request,
         status="queued",
         status_code=202,
-        result={"task_id": task_result.id, "operation": operation, "filename": file.filename},
+        result={"task_id": task_result.id, "operation": operation, "filename": file.filename, "queue": queue},
     )
 
 
@@ -406,13 +421,20 @@ async def cancel_job(
     auth: None = Depends(auth_required),
 ):
     result = AsyncResult(task_id)
-    if hasattr(result, "revoke"):
-        try:
-            result.revoke(terminate=False)
-        except Exception as err:
-            raise HTTPException(status_code=500, detail="Unable to cancel task") from err
+    if not hasattr(result, "revoke"):
+        _log_enterprise_action(request, "job_cancel", {"task_id": task_id, "status": "unsupported"})
+        return success_response(
+            request,
+            status="done",
+            result={"task_id": task_id, "status": "cancel-unsupported", "is_final": False, "poll_after_ms": 1000},
+        )
 
-    _log_enterprise_action(request, "job_cancel", {"task_id": task_id})
+    try:
+        result.revoke(terminate=False)
+    except Exception as err:
+        raise HTTPException(status_code=500, detail="Unable to cancel task") from err
+
+    _log_enterprise_action(request, "job_cancel", {"task_id": task_id, "status": "canceled"})
     return success_response(
         request,
         status="done",
@@ -474,6 +496,8 @@ async def submit_batch_job(
 
 
 # Backward-compatible direct upload endpoints
+# NOTE: Legacy backward-compatible /ai/* endpoints still use .delay() intentionally.
+# They can be migrated to apply_async(queue=...) in a future breaking-change window.
 @router.post("/ai/face-enhance")
 async def api_face_enhance(
     request: Request,
