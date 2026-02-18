@@ -61,7 +61,7 @@ const initVideoTemporalPipeline = ({ elements, state, actions }) => {
       return;
     }
 
-    const worker = new Worker('/src/workers/temporal-denoise-worker.js');
+    const worker = new Worker(new URL('../workers/temporal-denoise-worker.js', import.meta.url), { type: 'classic' });
     worker.postMessage({
       type: 'denoise',
       payload: {
@@ -73,6 +73,9 @@ const initVideoTemporalPipeline = ({ elements, state, actions }) => {
     });
 
     worker.onmessage = (e) => {
+      if (e.data.type === 'status') {
+        actions.recordLog('local-denoise-status', e.data.message);
+      }
       if (e.data.type === 'progress') {
         actions.recordLog('local-denoise', `Кадр ${e.data.frame + 1}/${e.data.total}`);
       }

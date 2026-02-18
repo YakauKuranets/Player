@@ -11,7 +11,7 @@ from app.api.routes import auth_required
 from app.auth.service import create_user, login, revoke_session
 from app.config import settings
 from app.db.database import SessionLocal
-from app.db.models import UserRole
+from app.db.models import User, UserRole
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -38,6 +38,17 @@ class LoginRequest(BaseModel):
 
 @router.post("/register")
 async def register(request: Request, payload: RegisterRequest, db: Session = Depends(get_db)):
+    users_count = db.query(User).count()
+    if users_count > 0:
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            raise HTTPException(403, "Only admin can register new users")
+        from app.api.routes import verify_jwt
+
+        jwt_payload = verify_jwt(auth_header.split(" ", 1)[1].strip())
+        if jwt_payload.get("role") != UserRole.admin.value:
+            raise HTTPException(403, "Only admin can register new users")
+
     try:
         role = UserRole[payload.role]
     except KeyError as err:
