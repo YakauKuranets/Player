@@ -8,19 +8,29 @@ import hmac
 import json
 import logging
 import time
-from typing import Any, Dict, Tuple, List
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Tuple
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.api.response import success_response
 from app.config import settings
+from app.db.database import SessionLocal
+from app.db.models import UserSession
+from app.audit.enterprise import log_action
+from app.queue.gpu_router import gpu_router
 from app.queue.tasks import (
+    batch_denoise_task,
+    batch_face_enhance_task,
+    batch_upscale_task,
     denoise_task,
     detect_faces_task,
     detect_objects_task,
     face_enhance_task,
     upscale_task,
+    video_scene_detect_task,
+    video_temporal_denoise_task,
 )
 
 try:
@@ -36,18 +46,13 @@ except ImportError:  # pragma: no cover
 RATE_LIMIT = 1.0
 _request_times: Dict[str, float] = {}
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
 class JobSubmitRequest(BaseModel):
-    """Submit payload for async job processing."""
-
-    operation: str = Field(..., description="AI operation name")
-    image_base64: str = Field(..., description="Input image bytes encoded with base64")
+    operation: str = Field(...)
+    image_base64: str = Field(...)
     params: Dict[str, Any] = Field(default_factory=dict)
-
-
 
 
 PRESET_DEFAULTS: Dict[str, Dict[str, Dict[str, Any]]] = {
@@ -70,7 +75,6 @@ PRESET_DEFAULTS: Dict[str, Dict[str, Dict[str, Any]]] = {
 
 
 def normalize_job_params(operation: str, raw_params: Dict[str, Any]) -> Tuple[str, List[Any], Dict[str, Any]]:
-    """Validate and normalize params for a job operation."""
     params = dict(raw_params or {})
     normalized: Dict[str, Any] = {}
 
@@ -88,12 +92,10 @@ def normalize_job_params(operation: str, raw_params: Dict[str, Any]) -> Tuple[st
         return operation, [], normalized
 
     if operation == "upscale":
-        factor = merged_params.get("factor", 2)
-        if not isinstance(factor, int):
-            try:
-                factor = int(factor)
-            except Exception as err:
-                raise HTTPException(status_code=400, detail="upscale.factor must be an integer") from err
+        try:
+            factor = int(merged_params.get("factor", 2))
+        except Exception as err:
+            raise HTTPException(status_code=400, detail="upscale.factor must be an integer") from err
         if factor not in {2, 4, 8}:
             raise HTTPException(status_code=400, detail="upscale.factor must be one of 2, 4, 8")
         normalized["factor"] = factor
@@ -135,6 +137,7 @@ def normalize_job_params(operation: str, raw_params: Dict[str, Any]) -> Tuple[st
 
     raise HTTPException(status_code=400, detail=f"Unsupported operation: {operation}")
 
+
 def _base64url_decode(input_str: str) -> bytes:
     padding = "=" * (-len(input_str) % 4)
     return base64.urlsafe_b64decode(input_str + padding)
@@ -155,22 +158,75 @@ def verify_jwt(token: str) -> dict:
     if not hmac.compare_digest(expected_sig, signature):
         raise ValueError("Invalid token signature")
 
+    return json.loads(payload_bytes.decode("utf-8"))
+
+
+def _validate_session_payload(payload: dict) -> None:
+    exp = payload.get("exp")
+    if exp is not None:
+        try:
+            exp_ts = int(exp)
+        except Exception as err:
+            raise HTTPException(status_code=401, detail="Invalid token exp") from err
+        if exp_ts < int(time.time()):
+            raise HTTPException(status_code=401, detail="Token expired")
+
+    session_id = payload.get("session_id")
+    if session_id is None:
+        return
+
+    db = SessionLocal()
     try:
-        return json.loads(payload_bytes.decode("utf-8"))
-    except json.JSONDecodeError as err:
-        raise ValueError("Invalid payload") from err
+        session = db.query(UserSession).filter(UserSession.id == int(session_id)).first()
+        if session is None:
+            raise HTTPException(status_code=401, detail="Session not found")
+        if session.revoked:
+            raise HTTPException(status_code=401, detail="Session revoked")
+        if session.expires_at and session.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            raise HTTPException(status_code=401, detail="Session expired")
+    finally:
+        db.close()
 
 
 async def auth_required(request: Request) -> None:
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Authorization header")
+
     token = auth_header.split(" ", 1)[1].strip()
     try:
-        request.state.jwt_payload = verify_jwt(token)
+        payload = verify_jwt(token)
+        _validate_session_payload(payload)
+    except HTTPException:
+        raise
     except Exception as err:
         raise HTTPException(status_code=401, detail="Invalid token") from err
 
+    request.state.jwt_payload = payload
+
+
+
+
+def _log_enterprise_action(request: Request, action: str, details: dict | None = None, status: str = "success") -> None:
+    payload = getattr(request.state, "jwt_payload", {}) or {}
+    db = SessionLocal()
+    try:
+        user_id = payload.get("sub")
+        team_id = payload.get("team_id")
+        log_action(
+            db=db,
+            action=action,
+            user_id=int(user_id) if str(user_id).isdigit() else None,
+            team_id=int(team_id) if str(team_id).isdigit() else None,
+            details=details or {},
+            ip_address=request.client.host if request.client else None,
+            request_id=getattr(request.state, "request_id", None),
+            status=status,
+        )
+    except Exception:
+        pass
+    finally:
+        db.close()
 
 async def rate_limit(request: Request) -> None:
     ip = request.client.host if request.client else "anonymous"
@@ -249,11 +305,7 @@ def _to_task_status(async_result: AsyncResult, task_id: str) -> Dict[str, Any]:
 
 @router.get("/hello")
 async def hello_world(request: Request):
-    return success_response(
-        request,
-        status="done",
-        result={"message": "Hello from PLAYE PhotoLab backend!"},
-    )
+    return success_response(request, status="done", result={"message": "Hello from PLAYE PhotoLab backend!"})
 
 
 @router.post("/job/submit")
@@ -263,7 +315,6 @@ async def submit_job(
     auth: None = Depends(auth_required),
     limiter: None = Depends(rate_limit),
 ):
-    """Unified async job submit endpoint for Phase 1A queue orchestration."""
     operation, extra_args, normalized_params = normalize_job_params(payload.operation, payload.params)
     task_map = {
         "face_enhance": face_enhance_task,
@@ -279,9 +330,9 @@ async def submit_job(
         raise HTTPException(status_code=400, detail="Invalid image_base64 payload") from err
 
     task_fn = task_map[operation]
-
     if hasattr(task_fn, "delay"):
         task_result = task_fn.delay(image_bytes, *extra_args)
+        _log_enterprise_action(request, "job_submit", {"operation": operation, "mode": "async", "params": normalized_params})
         return success_response(
             request,
             status="queued",
@@ -295,6 +346,7 @@ async def submit_job(
         )
 
     output = task_fn(image_bytes, *extra_args)
+    _log_enterprise_action(request, "job_submit", {"operation": operation, "mode": "sync", "params": normalized_params})
     return success_response(
         request,
         status="done",
@@ -308,6 +360,43 @@ async def submit_job(
     )
 
 
+@router.post("/job/video/submit")
+async def submit_video_job(
+    request: Request,
+    file: UploadFile = File(...),
+    operation: str = Form("temporal_denoise"),
+    fps: float = Form(1.0),
+    scene_threshold: float = Form(28.0),
+    temporal_window: int = Form(3),
+    auth: None = Depends(auth_required),
+    limiter: None = Depends(rate_limit),
+):
+    video_bytes = await file.read()
+
+    if operation == "temporal_denoise":
+        task_result = video_temporal_denoise_task.delay(video_bytes, fps)
+    elif operation == "scene_detect":
+        task_result = video_scene_detect_task.delay(video_bytes, scene_threshold, temporal_window)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown video operation: {operation}")
+
+    _log_enterprise_action(request, "video_job_submit", {"operation": operation, "fps": fps, "filename": file.filename})
+    return success_response(
+        request,
+        status="queued",
+        status_code=202,
+        result={"task_id": task_result.id, "operation": operation, "filename": file.filename},
+    )
+
+
+@router.get("/job/{task_id}/status")
+async def get_job_status_v2(
+    request: Request,
+    task_id: str,
+    auth: None = Depends(auth_required),
+):
+    result = AsyncResult(task_id)
+    return success_response(request, status="done", result=_to_task_status(result, task_id))
 
 
 @router.post("/job/{task_id}/cancel")
@@ -316,46 +405,75 @@ async def cancel_job(
     task_id: str,
     auth: None = Depends(auth_required),
 ):
-    """Cancel queued/running job when broker supports revoke."""
     result = AsyncResult(task_id)
-
     if hasattr(result, "revoke"):
         try:
             result.revoke(terminate=False)
-        except Exception as err:  # pragma: no cover
+        except Exception as err:
             raise HTTPException(status_code=500, detail="Unable to cancel task") from err
-        return success_response(
-            request,
-            status="done",
-            result={
-                "task_id": task_id,
-                "status": "canceled",
-                "is_final": True,
-                "poll_after_ms": 0,
-            },
-        )
 
+    _log_enterprise_action(request, "job_cancel", {"task_id": task_id})
     return success_response(
         request,
         status="done",
+        result={"task_id": task_id, "status": "canceled", "is_final": True, "poll_after_ms": 0},
+    )
+
+
+@router.get("/system/gpu")
+async def gpu_status(request: Request, auth: None = Depends(auth_required)):
+    return success_response(
+        request,
+        status="done",
+        result={"gpus": gpu_router.status(), "strategy": "least_loaded"},
+    )
+
+
+@router.post("/job/batch/submit")
+async def submit_batch_job(
+    request: Request,
+    operation: str = Form(...),
+    files: list[UploadFile] = File(...),
+    factor: int = Form(2),
+    level: str = Form("medium"),
+    auth: None = Depends(auth_required),
+    limiter: None = Depends(rate_limit),
+):
+    images_b64 = [base64.b64encode(await f.read()).decode() for f in files]
+    queue = gpu_router.get_best_queue()
+
+    batch_task_map = {
+        "upscale": (batch_upscale_task, [images_b64, factor]),
+        "denoise": (batch_denoise_task, [images_b64, level]),
+        "face_enhance": (batch_face_enhance_task, [images_b64]),
+    }
+    task_entry = batch_task_map.get(operation)
+    if task_entry is None:
+        raise HTTPException(400, f"Unsupported batch operation: {operation}")
+
+    task_fn, task_args = task_entry
+    if hasattr(task_fn, "apply_async"):
+        task_result = task_fn.apply_async(args=task_args, queue=queue)
+        task_id = task_result.id
+    else:
+        _ = task_fn(*task_args)
+        task_id = f"sync-{int(time.time() * 1000)}"
+
+    _log_enterprise_action(request, "batch_job_submit", {"operation": operation, "batch_size": len(files), "queue": queue})
+    return success_response(
+        request,
+        status="queued",
+        status_code=202,
         result={
             "task_id": task_id,
-            "status": "cancel-unsupported",
-            "is_final": False,
-            "poll_after_ms": 800,
+            "operation": operation,
+            "batch_size": len(files),
+            "queue": queue,
         },
     )
-@router.get("/job/{task_id}/status")
-async def get_job_status_v2(
-    request: Request,
-    task_id: str,
-    auth: None = Depends(auth_required),
-):
-    """Unified status polling endpoint for queued jobs."""
-    result = AsyncResult(task_id)
-    return success_response(request, status="done", result=_to_task_status(result, task_id))
 
 
+# Backward-compatible direct upload endpoints
 @router.post("/ai/face-enhance")
 async def api_face_enhance(
     request: Request,
@@ -363,7 +481,6 @@ async def api_face_enhance(
     auth: None = Depends(auth_required),
     limiter: None = Depends(rate_limit),
 ):
-    logger.info("[face-enhance] Processing request from %s", file.filename)
     image_bytes = await file.read()
     if hasattr(face_enhance_task, "delay"):
         task_result = face_enhance_task.delay(image_bytes)
@@ -375,22 +492,17 @@ async def api_face_enhance(
         )
 
     result_data = face_enhance_task(image_bytes)
-    return success_response(
-        request,
-        status="done",
-        result={"result": result_data, "filename": file.filename},
-    )
+    return success_response(request, status="done", result={"result": result_data, "filename": file.filename})
 
 
 @router.post("/ai/upscale")
 async def api_upscale(
     request: Request,
     file: UploadFile = File(...),
-    factor: int = 2,
+    factor: int = Form(2),
     auth: None = Depends(auth_required),
     limiter: None = Depends(rate_limit),
 ):
-    logger.info("[upscale] Processing request from %s (factor=%s)", file.filename, factor)
     image_bytes = await file.read()
     if hasattr(upscale_task, "delay"):
         task_result = upscale_task.delay(image_bytes, factor)
@@ -402,22 +514,17 @@ async def api_upscale(
         )
 
     result_data = upscale_task(image_bytes, factor)
-    return success_response(
-        request,
-        status="done",
-        result={"result": result_data, "filename": file.filename, "factor": factor},
-    )
+    return success_response(request, status="done", result={"result": result_data, "filename": file.filename, "factor": factor})
 
 
 @router.post("/ai/denoise")
 async def api_denoise(
     request: Request,
     file: UploadFile = File(...),
-    level: str = "light",
+    level: str = Form("light"),
     auth: None = Depends(auth_required),
     limiter: None = Depends(rate_limit),
 ):
-    logger.info("[denoise] Processing request from %s (level=%s)", file.filename, level)
     image_bytes = await file.read()
     if hasattr(denoise_task, "delay"):
         task_result = denoise_task.delay(image_bytes, level)
@@ -429,11 +536,7 @@ async def api_denoise(
         )
 
     result_data = denoise_task(image_bytes, level)
-    return success_response(
-        request,
-        status="done",
-        result={"result": result_data, "filename": file.filename, "level": level},
-    )
+    return success_response(request, status="done", result={"result": result_data, "filename": file.filename, "level": level})
 
 
 @router.post("/ai/detect-faces")
@@ -443,7 +546,6 @@ async def api_detect_faces(
     auth: None = Depends(auth_required),
     limiter: None = Depends(rate_limit),
 ):
-    logger.info("[detect-faces] Processing request from %s", file.filename)
     image_bytes = await file.read()
     if hasattr(detect_faces_task, "delay"):
         task_result = detect_faces_task.delay(image_bytes)
@@ -455,11 +557,7 @@ async def api_detect_faces(
         )
 
     faces = detect_faces_task(image_bytes)
-    return success_response(
-        request,
-        status="done",
-        result={"faces": faces, "filename": file.filename},
-    )
+    return success_response(request, status="done", result={"faces": faces, "filename": file.filename})
 
 
 @router.post("/ai/detect-objects")
@@ -469,7 +567,6 @@ async def api_detect_objects(
     auth: None = Depends(auth_required),
     limiter: None = Depends(rate_limit),
 ):
-    logger.info("[detect-objects] Processing request from %s", file.filename)
     image_bytes = await file.read()
     if hasattr(detect_objects_task, "delay"):
         task_result = detect_objects_task.delay(image_bytes)
@@ -481,20 +578,14 @@ async def api_detect_objects(
         )
 
     objects = detect_objects_task(image_bytes)
-    return success_response(
-        request,
-        status="done",
-        result={"objects": objects, "filename": file.filename},
-    )
+    return success_response(request, status="done", result={"objects": objects, "filename": file.filename})
 
 
 @router.get("/jobs/{task_id}")
-async def get_job_status(
+async def get_job_status_alias(
     request: Request,
     task_id: str,
     auth: None = Depends(auth_required),
 ):
-    logger.info("[jobs] Checking status for task %s", task_id)
     result = AsyncResult(task_id)
-    payload = _to_task_status(result, task_id)
-    return success_response(request, status="done", result=payload)
+    return success_response(request, status="done", result=_to_task_status(result, task_id))

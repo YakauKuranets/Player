@@ -92,8 +92,8 @@
 ## Прогресс по глобальному плану (оценка)
 
 - **Phase 1:** ~100% (request tracing + audit trail уже есть; внедрён unified response schema, базовые `/job/submit` + `/job/{task_id}/status`, frontend polling integration, расширенная обработка статусов job polling + unified state mapping (`queued/running/retry/done/failed/canceled`) + `is_final/poll_after_ms` hints for stable frontend polling, operator-driven cancel endpoint + UI control, pause/resume queue controls in UI + manual retry/clear terminal queue controls, baseline `ci:smoke` checks и workflow `ci-smoke` в GitHub Actions, configurable pipeline params, backend param validation тестами и scene-aware detect_objects params, плюс worker-based temporal denoise в frontend и preset-aware queue params, осталось полноценный queued orchestration под нагрузкой и расширенные quality checks в CI).
-- **Phase 2:** ~5% (формально зафиксированы требования, но video temporal pipeline и автоматические отчёты ещё не внедрены).
-- **Phase 3:** ~0% (model governance, multi-node/multi-GPU orchestration и explainability пока не начинались).
+- **Phase 2:** ~89% (усилен video temporal pipeline: ONNX worker + server-side video jobs, восстановлена backward compatibility API-эндпоинтов и улучшена обработка batch/video параметров; остались оптимизации качества/производительности и полный UX-цикл export/report).
+- **Phase 3:** ~64% (добавлены multi-GPU primitives, batch API и enterprise foundation; дополнительно усилена аутентификация через проверку сессии/exp и контроль регистрации пользователей, расширен reporting suite (`/api/enterprise/reports/*` JSON/CSV + manifest), добавлены timeseries-отчёты активности (JSON/CSV) для аналитики нагрузки, а также введён глобальный RBAC middleware с path-template matching; остаются production hardening, observability, governance и полноценные e2e тесты).
 
 ## Реализация по этапам
 
