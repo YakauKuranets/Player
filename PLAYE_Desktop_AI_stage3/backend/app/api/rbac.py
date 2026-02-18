@@ -53,6 +53,7 @@ ENDPOINT_ROLES = {
     "GET /api/enterprise/reports/users/{user_id}/activity": UserRole.admin.value,
     "GET /api/enterprise/reports/users/{user_id}/activity.csv": UserRole.admin.value,
     "GET /api/enterprise/reports/manifest": UserRole.analyst.value,
+    "GET /api/enterprise/reports/manifest.csv": UserRole.analyst.value,
 }
 
 
