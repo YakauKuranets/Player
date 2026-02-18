@@ -15,6 +15,10 @@
             <input type="file" id="file-input" accept="video/*" multiple />
             <span>Загрузить видео</span>
           </label>
+          <div class="mode-menu" aria-label="Режим работы">
+            <button id="mode-video-button" class="mode-button active" type="button">🎬 Видеоплеер</button>
+            <button id="mode-photo-button" class="mode-button" type="button">🖼 Реконструктор фото</button>
+          </div>
         </div>
         <ul id="playlist" class="playlist"></ul>
       </aside>
@@ -26,6 +30,9 @@
             <canvas id="temporal-preview" class="temporal-preview"></canvas>
             <canvas id="ai-overlay" class="ai-overlay"></canvas>
             <div class="motion-indicator" id="motion-indicator">Движение</div>
+            <div id="photo-mode-placeholder" class="photo-mode-placeholder">
+              <p>Режим реконструктора фото активен. Используйте блок "AI / Модели → Фото-реконструктор".</p>
+            </div>
           </div>
           <p class="hint">
             Колесико мыши — масштаб; двойной клик — сброс масштаба.
@@ -658,6 +665,97 @@
             <ul id="marker-list" class="log-list"></ul>
           </div>
         </section>
+
+<!-- ═══════════════ ENTERPRISE ═══════════════ -->
+<section id="enterprise-section" class="panel">
+  <h2>🏢 Enterprise</h2>
+
+  <!-- Auth -->
+  <div class="card" id="auth-card">
+    <h3>Авторизация</h3>
+    <div class="row">
+      <input type="email" id="login-email" placeholder="Email" />
+      <input type="password" id="login-password" placeholder="Пароль" />
+      <button id="login-button">Войти</button>
+      <button id="logout-button">Выйти</button>
+    </div>
+    <p id="login-status" class="muted">Не авторизован</p>
+  </div>
+
+  <!-- GPU Status -->
+  <div class="card">
+    <h3>GPU статус</h3>
+    <button id="gpu-status-refresh">Обновить</button>
+    <div id="gpu-status-panel" class="code-panel"></div>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="card">
+    <h3>Дашборд</h3>
+    <button id="enterprise-dashboard-refresh">Обновить</button>
+    <pre id="enterprise-dashboard" class="code-panel"></pre>
+  </div>
+
+  <!-- Users -->
+  <div class="card">
+    <h3>Пользователи</h3>
+    <button id="enterprise-users-refresh">Обновить</button>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>ID</th><th>Email</th><th>Username</th>
+          <th>Роль</th><th>Активен</th><th>Последний вход</th><th>Действия</th>
+        </tr>
+      </thead>
+      <tbody id="enterprise-users-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Teams -->
+  <div class="card">
+    <h3>Команды</h3>
+    <div class="row">
+      <input id="team-name-input" placeholder="Название команды" />
+      <input id="team-desc-input" placeholder="Описание (необязательно)" />
+      <button id="team-create-button">Создать</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="team-id-input" placeholder="Team ID" style="width:80px" />
+      <input id="team-user-id-input" placeholder="User ID" style="width:80px" />
+      <button id="team-add-user-button">Добавить в команду</button>
+    </div>
+    <button id="enterprise-teams-refresh" style="margin-top:8px">Обновить список</button>
+    <div id="enterprise-teams-panel"></div>
+  </div>
+
+  <!-- Audit Log -->
+  <div class="card">
+    <h3>Audit Log</h3>
+    <div class="row">
+      <input id="enterprise-audit-action" placeholder="Фильтр по action" />
+      <input id="enterprise-audit-limit" type="number" value="50" style="width:70px" />
+      <button id="enterprise-audit-refresh">Обновить</button>
+      <button id="enterprise-audit-csv">⬇ CSV</button>
+    </div>
+    <table class="data-table" style="margin-top:8px; font-size:12px">
+      <thead>
+        <tr>
+          <th>Время</th><th>Action</th><th>User</th>
+          <th>Resource</th><th>ID</th><th>Статус</th><th>IP</th><th>Request ID</th>
+        </tr>
+      </thead>
+      <tbody id="enterprise-audit-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Timeseries -->
+  <div class="card">
+    <h3>Активность (timeseries)</h3>
+    <button id="enterprise-timeseries-refresh">Обновить</button>
+    <div id="enterprise-timeseries" class="code-panel"></div>
+  </div>
+</section>
+
       </main>
     </div>
     <canvas id="capture" class="hidden"></canvas>

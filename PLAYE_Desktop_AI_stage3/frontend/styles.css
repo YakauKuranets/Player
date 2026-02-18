@@ -438,3 +438,153 @@ button:disabled {
   border-radius: 10px;
   background: #0f131b;
 }
+
+/* ─── Enterprise ─── */
+.gpu-slot {
+  background: #1a1a2e;
+  border: 1px solid #2d2d4e;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #e0e0ff;
+}
+
+#enterprise-section .card {
+  background: #0f0f1a;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+#enterprise-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #a0a0cc;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.data-table th {
+  background: #1e1e32;
+  color: #8888aa;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid #2a2a3e;
+}
+
+.data-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #1a1a2a;
+  color: #ccccee;
+}
+
+.data-table tr:hover td {
+  background: #151525;
+}
+
+.status-ok {
+  color: #00cc66;
+  font-weight: 600;
+}
+
+.status-err {
+  color: #ff4466;
+  font-weight: 600;
+}
+
+.role-select {
+  background: #1e1e32;
+  color: #ccccee;
+  border: 1px solid #3a3a5e;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.deactivate-btn {
+  background: #3a1a1a;
+  color: #ff6666;
+  border: 1px solid #5a2a2a;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.deactivate-btn:hover {
+  background: #5a2a2a;
+}
+
+.deactivate-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+#login-status {
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+/* ─── View mode switch + info scroll ─── */
+.mode-menu {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mode-button {
+  border: 1px solid #2f394c;
+  background: #151923;
+  color: #cbd5f1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mode-button.active {
+  background: #1f2937;
+  border-color: #3b82f6;
+  color: #e5edff;
+}
+
+#viewer-info-scroll {
+  margin-top: 10px;
+  max-height: 430px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.photo-mode-placeholder {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 13, 18, 0.9);
+  color: #cbd5f1;
+  text-align: center;
+  padding: 24px;
+  font-size: 15px;
+}
+
+body.mode-photo #video,
+body.mode-photo #temporal-preview,
+body.mode-photo #ai-overlay,
+body.mode-photo #motion-indicator {
+  display: none !important;
+}
+
+body.mode-photo .photo-mode-placeholder {
+  display: flex;
+}
