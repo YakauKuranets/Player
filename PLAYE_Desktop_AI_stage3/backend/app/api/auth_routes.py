@@ -61,9 +61,10 @@ async def register(request: Request, payload: RegisterRequest, db: Session = Dep
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             raise HTTPException(403, "Only admin can register new users")
-        from app.api.routes import verify_jwt
+        from app.api.routes import _validate_session_payload, verify_jwt
 
         jwt_payload = verify_jwt(auth_header.split(" ", 1)[1].strip())
+        _validate_session_payload(jwt_payload)
         if jwt_payload.get("role") != UserRole.admin.value:
             raise HTTPException(403, "Only admin can register new users")
 
