@@ -12,9 +12,66 @@ export const createQualityBlueprint = () => ({
       state.temporalCanvas.height = elements.video.videoHeight;
     };
 
-    const applyTemporalDenoise = () => {
+    const initTemporalWorker = () => {
+      if (state.temporalWorker) {
+        return state.temporalWorker;
+      }
+      if (!window.Worker) {
+        return null;
+      }
+      try {
+        const worker = new Worker(new URL("../workers/temporal-denoise-worker.js", import.meta.url), {
+          type: "module",
+        });
+        state.temporalWorker = worker;
+        return worker;
+      } catch (_error) {
+        return null;
+      }
+    };
+
+    const averageFramesSync = (frames) => {
+      const pixels = frames[0].length;
+      const output = new Uint8ClampedArray(pixels);
+      for (let i = 0; i < pixels; i += 1) {
+        let sum = 0;
+        for (let f = 0; f < frames.length; f += 1) {
+          sum += frames[f][i];
+        }
+        output[i] = Math.round(sum / frames.length);
+      }
+      return output;
+    };
+
+    const averageFramesAsync = (worker, width, height, frames) =>
+      new Promise((resolve, reject) => {
+        if (!worker) {
+          resolve(averageFramesSync(frames));
+          return;
+        }
+
+        const onMessage = (event) => {
+          const { type, output, error } = event.data || {};
+          if (type === "result") {
+            worker.removeEventListener("message", onMessage);
+            resolve(new Uint8ClampedArray(output));
+          } else if (type === "error") {
+            worker.removeEventListener("message", onMessage);
+            reject(new Error(error || "temporal-worker-error"));
+          }
+        };
+
+        worker.addEventListener("message", onMessage);
+        worker.postMessage({
+          type: "averageFrames",
+          payload: { width, height, frames },
+        });
+      });
+
+    const applyTemporalDenoise = async () => {
       if (!elements.temporalDenoiseToggle.checked) return;
       if (elements.video.readyState < 2) return;
+      if (state.temporalBusy) return;
 
       ensureTemporalCanvas();
       const width = state.temporalCanvas.width;
@@ -26,37 +83,36 @@ export const createQualityBlueprint = () => ({
       const windowSize = Number.parseInt(elements.temporalWindowInput.value, 10);
       if (!Number.isFinite(windowSize) || windowSize <= 0) return;
 
-      state.temporalFrames.unshift(frame);
+      state.temporalFrames.unshift(new Uint8ClampedArray(frame.data));
       state.temporalFrames = state.temporalFrames.slice(0, windowSize);
       if (state.temporalFrames.length < 2) return;
 
-      const output = state.temporalContext.createImageData(width, height);
-      for (let i = 0; i < output.data.length; i += 4) {
-        let r = 0;
-        let g = 0;
-        let b = 0;
-        let a = 0;
-        state.temporalFrames.forEach((stored) => {
-          r += stored.data[i];
-          g += stored.data[i + 1];
-          b += stored.data[i + 2];
-          a += stored.data[i + 3];
-        });
-        const count = state.temporalFrames.length;
-        output.data[i] = r / count;
-        output.data[i + 1] = g / count;
-        output.data[i + 2] = b / count;
-        output.data[i + 3] = a / count;
-      }
-      state.temporalContext.putImageData(output, 0, 0);
-      elements.video.style.opacity = "0";
-      if (!elements.temporalPreview) return;
-      elements.temporalPreview.style.opacity = "1";
-      elements.temporalPreview.width = width;
-      elements.temporalPreview.height = height;
-      const previewContext = elements.temporalPreview.getContext("2d");
-      if (previewContext) {
-        previewContext.putImageData(output, 0, 0);
+      state.temporalBusy = true;
+      try {
+        const worker = initTemporalWorker();
+        const averaged = await averageFramesAsync(worker, width, height, state.temporalFrames);
+        const output = state.temporalContext.createImageData(width, height);
+        output.data.set(averaged);
+        state.temporalContext.putImageData(output, 0, 0);
+
+        elements.video.style.opacity = "0";
+        if (!elements.temporalPreview) return;
+        elements.temporalPreview.style.opacity = "1";
+        elements.temporalPreview.width = width;
+        elements.temporalPreview.height = height;
+        const previewContext = elements.temporalPreview.getContext("2d");
+        if (previewContext) {
+          previewContext.putImageData(output, 0, 0);
+        }
+      } catch (_error) {
+        const fallback = state.temporalContext.createImageData(width, height);
+        fallback.data.set(averageFramesSync(state.temporalFrames));
+        const previewContext = elements.temporalPreview?.getContext("2d");
+        if (previewContext) {
+          previewContext.putImageData(fallback, 0, 0);
+        }
+      } finally {
+        state.temporalBusy = false;
       }
     };
     const setupStabilizationCanvas = () => {
@@ -225,6 +281,7 @@ export const createQualityBlueprint = () => ({
           elements.temporalPreview.style.opacity = "0";
         }
         state.temporalFrames = [];
+        state.temporalBusy = false;
       }
       actions.recordLog(
         "temporal-denoise-toggle",
@@ -538,7 +595,9 @@ export const createQualityBlueprint = () => ({
       );
     });
 
-    elements.video.addEventListener("timeupdate", applyTemporalDenoise);
+    elements.video.addEventListener("timeupdate", () => {
+      applyTemporalDenoise();
+    });
     applyFilters();
   },
 });

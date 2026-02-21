@@ -1,63 +1,120 @@
-"""
-SQLAlchemy models for PLAYE PhotoLab backend.
+"""SQLAlchemy models for PLAYE PhotoLab backend."""
 
-This module defines the database schema for the cloud backend. The two
-primary entities are ``Case`` and ``AIJob``. A ``Case`` represents a
-collection of related media and analysis tasks, while an ``AIJob``
-represents a single AI inference task executed on an image. Additional
-models can be added here as needed (e.g. ``User``, ``ModelMetadata``).
-"""
+from __future__ import annotations
 
+import enum
 from datetime import datetime
-from sqlalchemy import (
-    Column,
-    Integer,
-    String,
-    DateTime,
-    ForeignKey,
-)
-from sqlalchemy.orm import declarative_base, relationship
 
+from sqlalchemy import Boolean, Column, DateTime, Enum as SAEnum, ForeignKey, Integer, String
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
 
+class UserRole(enum.Enum):
+    admin = "admin"
+    analyst = "analyst"
+    viewer = "viewer"
+
+
+class Team(Base):
+    __tablename__ = "teams"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    members = relationship("User", back_populates="team")
+    workspaces = relationship("Workspace", back_populates="team")
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    team = relationship("Team", back_populates="workspaces")
+    cases = relationship("Case", back_populates="workspace")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String, unique=True, nullable=False, index=True)
+    username = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(SAEnum(UserRole), default=UserRole.analyst, nullable=False)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+
+    team = relationship("Team", back_populates="members")
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    audit_logs = relationship("EnterpriseAuditLog", back_populates="user")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String, unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    revoked = Column(Boolean, default=False)
+    ip_address = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+
+    user = relationship("User", back_populates="sessions")
+
+
+class EnterpriseAuditLog(Base):
+    __tablename__ = "enterprise_audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
+    action = Column(String, nullable=False)
+    resource_type = Column(String, nullable=True)
+    resource_id = Column(String, nullable=True)
+    details = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
+    request_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=True)
+
+    user = relationship("User", back_populates="audit_logs")
+
+
 class Case(Base):
-    """Database model representing a forensic case.
+    __tablename__ = "cases"
 
-    A case groups together related images and the AI jobs applied to them.
-    """
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    __tablename__ = 'cases'
-
-    id: int = Column(Integer, primary_key=True)
-    name: str = Column(String, nullable=False)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow)
-    updated_at: datetime = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationship to AIJob. A case may have many jobs.
-    jobs = relationship('AIJob', back_populates='case', cascade='all, delete-orphan')
+    jobs = relationship("AIJob", back_populates="case", cascade="all, delete-orphan")
+    workspace = relationship("Workspace", back_populates="cases")
 
 
 class AIJob(Base):
-    """Database model representing an AI processing job.
+    __tablename__ = "ai_jobs"
 
-    Each job corresponds to a single invocation of an AI model (e.g. face
-    enhancement, upscaling, denoising, detection). Jobs may optionally be
-    associated with a case. They track input and output file paths as well
-    as the current status of the job.
-    """
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=True)
+    task = Column(String, nullable=False)
+    status = Column(String, default="pending")
+    input_path = Column(String, nullable=True)
+    output_path = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    __tablename__ = 'ai_jobs'
-
-    id: int = Column(Integer, primary_key=True)
-    case_id: int = Column(Integer, ForeignKey('cases.id'), nullable=True)
-    task: str = Column(String, nullable=False)
-    status: str = Column(String, default='pending')
-    input_path: str = Column(String, nullable=True)
-    output_path: str = Column(String, nullable=True)
-    created_at: datetime = Column(DateTime, default=datetime.utcnow)
-    updated_at: datetime = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationship back to the case
-    case = relationship('Case', back_populates='jobs')
+    case = relationship("Case", back_populates="jobs")

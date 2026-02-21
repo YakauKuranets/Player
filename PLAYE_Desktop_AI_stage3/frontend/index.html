@@ -33,7 +33,13 @@
         </section>
 
         <section class="controls">
-          <div class="control-group timeline">
+          <div class="controls-tabs" role="tablist" aria-label="Секции управления">
+            <button type="button" class="tab-button active" data-tab-target="tab-basic">Базовые</button>
+            <button type="button" class="tab-button" data-tab-target="tab-ai">AI / Модели</button>
+            <button type="button" class="tab-button" data-tab-target="tab-case">Дело / Логи</button>
+          </div>
+
+          <div class="control-group timeline tab-panel tab-basic active">
             <h2>Таймлайн</h2>
             <div class="timeline-header">
               <span id="timeline-current">0:00.000</span>
@@ -57,7 +63,7 @@
             </div>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-basic active">
             <h2>Воспроизведение</h2>
             <label>
               Скорость: <span id="speed-value">1x</span>
@@ -77,7 +83,7 @@
             </div>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-basic active">
             <h2>Нарезка</h2>
             <div class="clip-row">
               <button id="mark-in">Установить IN</button>
@@ -90,7 +96,7 @@
             <button id="export-clip">Экспорт нарезки</button>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-basic active">
             <h2>Качество</h2>
             <label>
               Улучшение (контраст/яркость)
@@ -277,7 +283,7 @@
             <button id="reset-filters" type="button">Сброс фильтров</button>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-basic active">
             <h2>Детектор движения</h2>
             <label class="toggle">
               <input type="checkbox" id="motion-marker-toggle" />
@@ -316,7 +322,7 @@
             </p>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-ai">
             <h2>AI анализ (лица и объекты)</h2>
             <button id="ai-face-detect" type="button">
               Найти лица (демо)
@@ -377,7 +383,112 @@
             <ul class="ai-face-list" id="ai-scene-list"></ul>
           </div>
 
-          <div class="control-group">
+
+          <div class="control-group tab-panel tab-ai">
+            <h2>Hypothesis (Phase 0)</h2>
+            <p class="muted">Сформируйте набор гипотез для будущей обработки клипов.</p>
+            <label class="toggle"><input type="checkbox" class="hypothesis-type" value="restore" checked /> Face Restore</label>
+            <label class="toggle"><input type="checkbox" class="hypothesis-type" value="superres" checked /> Super Resolution</label>
+            <label class="toggle"><input type="checkbox" class="hypothesis-type" value="denoise" checked /> Denoise</label>
+            <label class="toggle"><input type="checkbox" class="hypothesis-type" value="deblur" /> Deblur</label>
+            <label class="toggle"><input type="checkbox" class="hypothesis-type" value="detect" checked /> Detect</label>
+            <label class="toggle"><input type="checkbox" class="hypothesis-type" value="reconstruct3d" /> 3D reconstruct</label>
+            <div class="button-row">
+              <button id="hypothesis-generate" type="button">Сформировать гипотезы</button>
+              <button id="hypothesis-export" type="button">Экспорт JSON</button>
+            </div>
+            <p class="muted" id="hypothesis-status">Гипотезы не сформированы.</p>
+            <ul id="hypothesis-list" class="log-list"></ul>
+          </div>
+
+          <div class="control-group tab-panel tab-ai">
+            <h2>Photo reconstruct (Phase 0)</h2>
+            <label>
+              Источники (кадры)
+              <input id="photo-source-input" type="file" accept="image/*" multiple />
+            </label>
+            <div class="button-row">
+              <button id="photo-blend" type="button">Собрать реконструкцию</button>
+              <button id="photo-download" type="button">Скачать PNG</button>
+            </div>
+            <p class="muted" id="photo-status">Выберите кадры и нажмите «Собрать реконструкцию».</p>
+            <canvas id="photo-canvas" class="workspace-canvas"></canvas>
+          </div>
+
+          <div class="control-group tab-panel tab-ai">
+            <h2>Compare side-by-side (Phase 0)</h2>
+            <label>
+              Кадр A
+              <input id="compare-left-input" type="file" accept="image/*" />
+            </label>
+            <label>
+              Кадр B
+              <input id="compare-right-input" type="file" accept="image/*" />
+            </label>
+            <label>
+              Разделитель: <span id="compare-split-value">50%</span>
+              <input id="compare-split" type="range" min="5" max="95" value="50" step="1" />
+            </label>
+            <div class="button-row">
+              <button id="compare-render" type="button">Построить сравнение</button>
+            </div>
+            <p class="muted" id="compare-status">Выберите 2 изображения для сравнения.</p>
+            <canvas id="compare-canvas" class="workspace-canvas"></canvas>
+          </div>
+
+          <div class="control-group tab-panel tab-ai">
+            <h2>Backend Queue API (Phase 1A)</h2>
+            <label>
+              Base URL
+              <input type="text" id="api-base-url" value="http://127.0.0.1:8000/api" />
+            </label>
+            <label>
+              JWT token
+              <input type="text" id="api-token" placeholder="Bearer token (опционально)" />
+            </label>
+            <label>
+              Операция для pipeline job
+              <select id="api-operation">
+                <option value="detect_objects" selected>detect_objects</option>
+                <option value="detect_faces">detect_faces</option>
+                <option value="face_enhance">face_enhance</option>
+                <option value="upscale">upscale</option>
+                <option value="denoise">denoise</option>
+              </select>
+            </label>
+            <label>
+              Preset обработки
+              <select id="api-preset">
+                <option value="balanced" selected>Balanced</option>
+                <option value="forensic_safe">Forensic Safe</option>
+                <option value="presentation">Presentation</option>
+              </select>
+            </label>
+            <label>
+              Upscale factor (для `upscale`)
+              <select id="api-upscale-factor">
+                <option value="2" selected>2x</option>
+                <option value="4">4x</option>
+                <option value="8">8x</option>
+              </select>
+            </label>
+            <label>
+              Denoise level (для `denoise`)
+              <select id="api-denoise-level">
+                <option value="light" selected>light</option>
+                <option value="medium">medium</option>
+                <option value="heavy">heavy</option>
+              </select>
+            </label>
+            <div class="button-row">
+              <button id="api-apply-preset" type="button">Применить preset</button>
+              <button id="api-connect" type="button">Подключить backend queue</button>
+              <button id="api-cancel-current" type="button">Отменить текущую backend job</button>
+            </div>
+            <p class="muted" id="api-connection-status">Backend queue: mock fallback.</p>
+          </div>
+
+          <div class="control-group tab-panel tab-ai">
             <h2>Модели (локальные)</h2>
             <div class="button-row">
               <button id="models-check" type="button">Проверить</button>
@@ -387,7 +498,7 @@
             <p class="muted" id="models-status">Модели: не проверено.</p>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-case">
             <h2>Дело и журнал</h2>
             <label>
               ID дела
@@ -447,6 +558,10 @@
             </label>
             <div class="button-row">
               <button id="queue-ffmpeg-job" type="button">В очередь pipeline (3.3.2)</button>
+              <button id="pipeline-pause" type="button">Пауза очереди</button>
+              <button id="pipeline-resume" type="button">Продолжить очередь</button>
+              <button id="pipeline-retry-failed" type="button">Повторить failed</button>
+              <button id="pipeline-clear-terminal" type="button">Очистить done/failed/canceled</button>
             </div>
             <p class="muted" id="pipeline-status">Pipeline: задач нет.</p>
             <label>
@@ -460,7 +575,7 @@
             <ul id="log-list" class="log-list"></ul>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-case">
             <h2>Библиотека дел</h2>
             <label>
               Сохранённые дела
@@ -500,7 +615,7 @@
             </p>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-case">
             <h2>Сводка по делу</h2>
             <div class="summary-grid">
               <div class="summary-card">
@@ -521,7 +636,7 @@
             </p>
           </div>
 
-          <div class="control-group">
+          <div class="control-group tab-panel tab-case">
             <h2>Маркеры событий</h2>
             <label>
               Тип события

@@ -77,13 +77,19 @@ body {
   padding: 24px;
   display: grid;
   gap: 24px;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  height: 100vh;
+  overflow: hidden;
+  align-items: start;
 }
 
 .viewer {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: sticky;
+  top: 24px;
+  align-self: start;
 }
 
 .viewer__surface {
@@ -142,6 +148,43 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.controls-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #0f1115;
+  padding-bottom: 8px;
+}
+
+.tab-button {
+  border: 1px solid #2f394c;
+  background: #151923;
+  color: #cbd5f1;
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.tab-button.active {
+  background: #1f2937;
+  border-color: #3b82f6;
+  color: #e5edff;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: flex;
 }
 
 .control-group {
@@ -373,5 +416,25 @@ button:disabled {
 @media (max-width: 1024px) {
   .main {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
+
+  .viewer {
+    position: static;
+  }
+
+  .controls {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+}
+
+.workspace-canvas {
+  width: 100%;
+  min-height: 160px;
+  border: 1px dashed #3b4458;
+  border-radius: 10px;
+  background: #0f131b;
 }
