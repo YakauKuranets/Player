@@ -1,4 +1,4 @@
-"""Celery worker with multi-GPU queues."""
+"""Celery worker with dynamic multi-GPU routing."""
 
 from __future__ import annotations
 
@@ -17,20 +17,10 @@ def create_celery_app() -> Celery:
         backend=os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
     )
 
-    queue = gpu_router.get_best_queue()
+    # ВАЖНО: task_routes НЕ задаём статически.
+    # Маршрутизация происходит динамически в момент отправки задачи
+    # через apply_async(queue=gpu_router.get_best_queue()).
     celery_app.conf.update(
-        task_routes={
-            "tasks.upscale": {"queue": queue},
-            "tasks.face_enhance": {"queue": queue},
-            "tasks.denoise": {"queue": queue},
-            "tasks.detect_faces": {"queue": queue},
-            "tasks.detect_objects": {"queue": queue},
-            "tasks.video_temporal_denoise": {"queue": queue},
-            "tasks.video_scene_detect": {"queue": queue},
-            "tasks.batch_upscale": {"queue": queue},
-            "tasks.batch_denoise": {"queue": queue},
-            "tasks.batch_face_enhance": {"queue": queue},
-        },
         task_default_queue="cpu",
         worker_prefetch_multiplier=1,
         task_acks_late=True,
@@ -61,4 +51,8 @@ def on_task_end(task_id, task, **kwargs):
 
 
 if __name__ == "__main__":
+    # Запускать отдельный воркер для каждой GPU:
+    # celery -A app.queue.worker worker -Q gpu_0 --concurrency=1 --loglevel=info
+    # celery -A app.queue.worker worker -Q gpu_1 --concurrency=1 --loglevel=info
+    # celery -A app.queue.worker worker -Q cpu   --concurrency=4 --loglevel=info
     celery_app.worker_main()

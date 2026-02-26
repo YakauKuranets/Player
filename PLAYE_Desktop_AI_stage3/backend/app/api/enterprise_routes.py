@@ -197,18 +197,65 @@ async def activate_user(
     return success_response(request, status="done", result={"user_id": user_id, "active": True})
 
 
-@router.get("/users/{user_id}/sessions")
-async def list_user_sessions(
+@router.patch("/sessions/{session_id}/revoke")
+async def revoke_session_endpoint(
     request: Request,
-    user_id: int,
-    include_revoked: bool = Query(False),
+    session_id: int,
     db: Session = Depends(get_db),
     auth: None = Depends(auth_required),
     rbac: None = Depends(require_admin),
 ):
+    """Отозвать конкретную сессию пользователя (принудительный logout)."""
+    session = db.query(UserSession).filter(UserSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session.revoked:
+        return success_response(
+            request,
+            status="done",
+            result={"session_id": session_id, "revoked": True, "already_revoked": True},
+        )
+
+    session.revoked = True
+    db.commit()
+
+    _audit(
+        request,
+        db,
+        action="session_revoke",
+        resource_type="session",
+        resource_id=str(session_id),
+        details={"user_id": session.user_id},
+    )
+
+    return success_response(
+        request,
+        status="done",
+        result={"session_id": session_id, "revoked": True, "already_revoked": False},
+    )
+
+
+@router.get("/users/{user_id}/sessions")
+async def list_user_sessions(
+    request: Request,
+    user_id: int,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+    auth: None = Depends(auth_required),
+    rbac: None = Depends(require_admin),
+):
+    """Список активных сессий пользователя."""
+    from datetime import datetime, timezone
+
     query = db.query(UserSession).filter(UserSession.user_id == user_id)
-    if not include_revoked:
-        query = query.filter(UserSession.revoked.is_(False))
+    if active_only:
+        now = datetime.now(timezone.utc)
+        query = query.filter(
+            UserSession.revoked.is_(False),
+            UserSession.expires_at > now,
+        )
+
     sessions = query.order_by(UserSession.created_at.desc()).all()
 
     return success_response(
@@ -221,32 +268,14 @@ async def list_user_sessions(
                     "id": s.id,
                     "created_at": s.created_at.isoformat() if s.created_at else None,
                     "expires_at": s.expires_at.isoformat() if s.expires_at else None,
-                    "revoked": s.revoked,
                     "ip_address": s.ip_address,
                     "user_agent": s.user_agent,
+                    "revoked": s.revoked,
                 }
                 for s in sessions
             ],
         },
     )
-
-
-@router.patch("/sessions/{session_id}/revoke")
-async def revoke_user_session(
-    request: Request,
-    session_id: int,
-    db: Session = Depends(get_db),
-    auth: None = Depends(auth_required),
-    rbac: None = Depends(require_admin),
-):
-    session = db.query(UserSession).filter(UserSession.id == session_id).first()
-    if not session:
-        raise HTTPException(404, "Session not found")
-
-    session.revoked = True
-    db.commit()
-    _audit(request, db, "session_revoke", resource_type="session", resource_id=str(session_id))
-    return success_response(request, status="done", result={"session_id": session_id, "revoked": True})
 
 
 @router.get("/users/{user_id}/activity")

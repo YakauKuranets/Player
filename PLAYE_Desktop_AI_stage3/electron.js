@@ -64,20 +64,29 @@ function startPythonBackend() {
     });
 
     let timeoutHandle = null;
+    let resolved = false;
 
-    pythonProcess.stdout.on('data', (data) => {
-      const message = data.toString();
-      console.log(`[Python] ${message}`);
-      // When Uvicorn announces startup, resolve the promise.
-      if (message.includes('Uvicorn running')) {
+    const onPythonOutput = (message) => {
+      // Uvicorn may write startup logs to stdout or stderr depending on config.
+      if (resolved) return;
+      if (message.includes('Uvicorn running') || message.includes('Application startup complete')) {
+        resolved = true;
         console.log('[Main] Python backend started successfully');
         if (timeoutHandle) clearTimeout(timeoutHandle);
         resolve();
       }
+    };
+
+    pythonProcess.stdout.on('data', (data) => {
+      const message = data.toString();
+      console.log(`[Python] ${message}`);
+      onPythonOutput(message);
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      console.error(`[Python Error] ${data}`);
+      const message = data.toString();
+      console.error(`[Python Error] ${message}`);
+      onPythonOutput(message);
     });
 
     pythonProcess.on('error', (error) => {
